@@ -1,0 +1,6 @@
+$a = "Hello, "
+$b = "World!"
+$:print($a + $b)
+$b = "seggsy"
+$:print($a)
+$:print($b)

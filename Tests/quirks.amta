@@ -1,0 +1,6 @@
+$:print( \
+	fun($a number, $b number)
+		return $a + $b
+	nfu (3, 4) \
+)
+# should print 7

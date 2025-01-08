@@ -1,0 +1,49 @@
+$:natural_power = fun($base number, $exp number)
+    $res = 1
+    while $exp > 0
+        $res = $res * $base
+        $exp = $exp - 1
+    ewhil
+    return $res
+nfu
+$:print($:natural_power(2, 3))
+
+# array utils methods
+$:array_make_emtpy = fun()
+    $array = {}
+    $array:length = 0
+    return $array
+nfu
+$:array_make_size = fun($length number, $default)
+    $array = {}
+    for $i $:range($length)
+        $array[$i] = $default
+    rfo
+    $array:length = $length
+    return $array
+nfu
+$:array_push = fun($array object, $value)
+    if (!$:isarray($array))
+        return nil
+    fi
+    $array[$array:length] = $value
+    $array:length = $array:length + 1
+nfu
+$:array_pop = fun($array object)
+    if(!$:isarray($array))
+        return nil
+    fi
+    $val = $array[$array:length - 1]
+    $array[$array:length - 1] = nil
+    $array:length = $array:length - 1
+    return $val
+nfu
+
+# simple example
+$my_arr = $:array_make_empty()
+$:array_push($my_arr, 1)
+$:array_push($my_arr, 2)
+$:array_push($my_arr, 3)
+$:print($my_arr)
+$:array_pop($my_arr)
+$:print($:array_pop($my_arr))

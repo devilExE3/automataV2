@@ -1,0 +1,30 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Simpler Exception Snippet</Title>
+      <Shortcut>dexception</Shortcut>
+    </Header>
+    <Snippet>
+      <Code Language="CSharp">
+        <![CDATA[[Serializable]
+        public class $Name$Exception : Exception
+        {
+          public $Name$Exception(string message) : base(message) { }
+        }]]>
+      </Code>
+      <Declarations>
+        <Literal>
+          <ID>Name</ID>
+          <ToolTip>Exception class name</ToolTip>
+          <Default>My</Default>
+        </Literal>
+      </Declarations>
+      <Imports>
+        <Import>
+          <Namespace>System</Namespace>
+        </Import>
+      </Imports>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

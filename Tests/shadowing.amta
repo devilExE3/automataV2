@@ -1,0 +1,6 @@
+$a = 4
+$fun = fun($a)
+    $:print($a)
+nfu
+$fun(5)
+$:print($a)
