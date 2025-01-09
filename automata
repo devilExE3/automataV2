@@ -8,9 +8,10 @@ statement --\                                                           /- "\n" 
             |- "if" - expression - program --------------------- "fi" --|
             |                              \- "el" - program -/         |
             |- "while" - expression - program - "ewhil" ----------------|
-            \- "for" - variable - expression - program - "rfo" ---------/
+            |- "for" - variable - expression - program - "rfo" ---------|
+            \- "return" - expression -----------------------------------/
 
-variable ---------------- "$" - VARNAME ----------------- [x]
+variable --- "$" - VARNAME ----------------------------------------- [x]
           \- expression - "[" - expression - "]" -------/
 
 fn_call - expression - "(" -------------- ")" --------------------- [x]

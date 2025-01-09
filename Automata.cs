@@ -178,6 +178,40 @@ namespace Automata
             public BaseValue Call(Scope currentScope);
             public List<(VarResolver, BaseValue.ValueType)> Head { get; }
         }
+
+        public class FunctionRunner : ICallable
+        {
+            public class ReturnValue : Exception
+            {
+                public BaseValue retVal;
+                public ReturnValue(BaseValue val) => retVal = val;
+            }
+
+            public List<(VarResolver, BaseValue.ValueType)> Head => head;
+            List<(VarResolver, BaseValue.ValueType)> head;
+            List<Instruction> body;
+            public FunctionRunner(List<(VarResolver, BaseValue.ValueType)> head, List<Instruction> body)
+            {
+                this.head = head;
+                this.body = body;
+            }
+            public BaseValue Call(Scope currentScope)
+            {
+                // use exceptions to handle function return value (it's easier)
+                try
+                {
+                    foreach (var instr in body)
+                        instr.Execute(currentScope);
+                }
+                catch (ReturnValue retVal)
+                {
+                    return retVal.retVal;
+                }
+                // default return value
+                return NilValue.Nil;
+            }
+        }
+
         public interface IEvaluable
         {
             public BaseValue Evaluate(Scope currentScope);
@@ -411,6 +445,34 @@ namespace Automata
             }
             public override string ToString() => $"VarObjectResolver({base_var} -> {child_name})";
         }
+        public class ObjectAccessor : VarResolver
+        {
+            public IEvaluable baseExpr;
+            public IEvaluable accessor;
+            public ObjectAccessor(IEvaluable baseExpr, IEvaluable accessor)
+            {
+                this.baseExpr = baseExpr;
+                this.accessor = accessor;
+            }
+
+            public override BaseValue Resolve(Scope currentScope)
+            {
+                var baseVal = baseExpr.Evaluate(currentScope);
+                if (baseVal.Type != BaseValue.ValueType.Object)
+                    throw new Exceptions.InvalidOperationException("Tried walking non-object value " + baseVal.Stringify().Value);
+                var accessVal = accessor.Evaluate(currentScope);
+                return ((ObjectValue)baseVal).GetChild((string)accessVal.Stringify().Value!);
+            }
+            public override void Assign(Scope currentScope, BaseValue value)
+            {
+                var baseVal = baseExpr.Evaluate(currentScope);
+                if (baseVal.Type != BaseValue.ValueType.Object)
+                    throw new Exceptions.InvalidOperationException("Tried walking non-object value " + baseVal.Stringify().Value);
+                var accessVal = accessor.Evaluate(currentScope);
+                ((ObjectValue)baseVal).SetChild((string)accessVal.Stringify().Value!, value);
+            }
+            public override string ToString() => $"ObjectAccessor(({baseExpr}) -> ({accessor}))";
+        }
 
         public abstract class Instruction
         {
@@ -421,6 +483,7 @@ namespace Automata
                 IfBlocks,
                 WhileBlocks,
                 ForBlocks,
+                FunctionReturn,
             }
             public InstructionType Type;
             public abstract void Execute(Scope currentScope);
@@ -562,6 +625,15 @@ namespace Automata
                         instr.Execute(blockScope);
                 }
             }
+        }
+        public class FunctionReturnInstruction : Instruction
+        {
+            public IEvaluable returnValue;
+            public FunctionReturnInstruction(IEvaluable returnValue)
+            {
+                this.returnValue = returnValue;
+            }
+            public override void Execute(Scope currentScope) => throw new FunctionRunner.ReturnValue(returnValue.Evaluate(currentScope));
         }
     }
 
@@ -875,623 +947,289 @@ namespace Automata
             }
         }
 
-        public abstract class Block
+        public class ProgramParser
         {
-            public enum BlockType
+            List<Token> tokens;
+            int crnt = 0;
+            public ProgramParser(List<Token> tokens)
             {
-                BaseToken,
-                // ->
-                Constant,
-                Variable,
-                FunctionCall,
-                // ->
-                Evaluable,
-                // ->
-                Instructions,
+                this.tokens = tokens;
             }
-            public BlockType Type;
-            public override string ToString() => ToString(0);
-            public abstract string ToString(int indent);
-            public delegate List<Block> extractorFunction(List<Block> blocks);
-            public void IfHasBlocksExtract(extractorFunction fn)
+            List<Token> nextTokens => tokens[crnt..];
+
+            public List<Instruction> ParseProgram()
             {
-                if (Type == BlockType.FunctionCall)
+                List<Instruction> ret = [];
+                while(nextTokens.Count > 0)
                 {
-                    var fnBlock = (FunctionCallBlock)this;
-                    List<List<Block>> newArgs = new();
-                    foreach (var argList in fnBlock.args)
-                        newArgs.Add(fn(argList));
-                    fnBlock.args = newArgs;
-                    return;
-                }
-                if (Type == BlockType.Evaluable)
-                {
-                    var evBlock = (EvaluableBlock)this;
-                    evBlock.components = fn(evBlock.components);
-                    return;
-                }
-            }
-        }
-        public class BaseTokenBlock : Block
-        {
-            public Token baseToken;
-            public BaseTokenBlock(Token baseToken)
-            {
-                Type = BlockType.BaseToken;
-                this.baseToken = baseToken;
-            }
-            public override string ToString(int indent) => $"BaseTokenBlock({baseToken})".Indent(indent);
-        }
-        public class ConstantBlock : Block
-        {
-            public BaseValue constValue;
-            public ConstantBlock(Token baseToken)
-            {
-                Type = BlockType.Constant;
-                var value = baseToken.Value;
-                if(value.StartsWith('"'))
-                {
-                    // extract string
-                    value = value[1..^1];
-                    // parse escape characters
-                    StringBuilder sb = new();
-                    for(int i = 0; i < value.Length; i++)
+                    if (nextTokens[0].Type == Token.TokenType.Keyword)
                     {
-                        if (value[i] != '\\')
+                        if (nextTokens[0].Value == "if")
                         {
-                            sb.Append(value[i]);
+                            // find matching 'el' and 'fi' keywords
+                            ++crnt;
+                            var expr = ParseExpression();
+                            int depth = 1;
+                            int match_el = 0, match_fi = 0;
+                            for (int i = 0; i < nextTokens.Count; i++)
+                            {
+                                if (nextTokens[i].Type != Token.TokenType.Keyword) continue;
+                                if (nextTokens[i].Value == "if")
+                                    ++depth;
+                                else if (nextTokens[i].Value == "fi")
+                                    --depth;
+                                if (depth > 1) continue;
+                                if (nextTokens[i].Value == "el" && depth == 1 && match_el == 0)
+                                    match_el = i;
+                                if (nextTokens[i].Value == "fi" && match_fi == 0)
+                                {
+                                    match_fi = i;
+                                    break;
+                                }
+                            }
+                            if (match_fi == 0)
+                                throw new Exceptions.MissingTokenException("Couldn't find matching 'fi' keyword");
+                            if (match_el == 0)
+                            {
+                                // only parse true block
+                                var true_block = new ProgramParser(nextTokens[..(match_fi - 1)]).ParseProgram();
+                                crnt = match_fi + 1;
+                                ret.Add(new IfBlocksInstruction(expr, true_block, null));
+                            }
+                            else
+                            {
+                                var true_block = new ProgramParser(nextTokens[..(match_el - 1)]).ParseProgram();
+                                var false_block = new ProgramParser(nextTokens[(match_el + 1)..(match_fi - 1)]).ParseProgram();
+                                crnt = match_fi + 1;
+                                ret.Add(new IfBlocksInstruction(expr, true_block, false_block));
+                            }
                             continue;
                         }
-                        if (value[i + 1] == '\\' || value[i + 1] == '"')
+                        if (nextTokens[0].Value == "while")
                         {
-                            sb.Append(value[i + 1]);
-                            i++;
+                            ++crnt;
+                            var expr = ParseExpression();
+                            int depth = 1;
+                            int match_ewhil = 0;
+                            for(int i = 0; i < nextTokens.Count; i++)
+                            {
+                                if (nextTokens[i].Type != Token.TokenType.Keyword)
+                                    continue;
+                                if (nextTokens[i].Value == "while")
+                                    ++depth;
+                                else if (nextTokens[i].Value == "ewhil")
+                                    --depth;
+                                if(depth == 0)
+                                {
+                                    match_ewhil = i;
+                                    break;
+                                }
+                            }
+                            if (match_ewhil == 0)
+                                throw new Exceptions.MissingTokenException("Couldn't find matching 'ewhil' keyword");
+                            var body = new ProgramParser(nextTokens[..(match_ewhil - 1)]).ParseProgram();
+                            ret.Add(new WhileBlocksInstruction(expr, body));
+                            crnt = match_ewhil + 1;
                             continue;
                         }
-                        if (value[i + 1] == 'n')
+                        if (nextTokens[0].Value == "for")
                         {
-                            sb.Append('\n');
-                            i++;
+                            ++crnt;
+                            var variable = ParseVariable();
+                            var expr = ParseExpression();
+                            int depth = 1;
+                            int match_rfo = 0;
+                            for(int i = 0; i < nextTokens.Count; i++)
+                            {
+                                if (nextTokens[i].Type != Token.TokenType.Keyword)
+                                    continue;
+                                if (nextTokens[i].Value == "for")
+                                    ++depth;
+                                if (nextTokens[i].Value == "rfo")
+                                    --depth;
+                                if (depth == 0)
+                                {
+                                    match_rfo = i;
+                                    break;
+                                }
+                            }
+                            if (match_rfo == 0)
+                                throw new Exceptions.MissingTokenException("Couldn't find matching 'rfo' keyword");
+                            var body = new ProgramParser(nextTokens[..(match_rfo - 1)]).ParseProgram();
+                            ret.Add(new ForBlocksInstruction(variable, expr, body));
+                            crnt = match_rfo + 1;
                             continue;
                         }
-                        if (value[i + 1] == 'x')
-                        {
-                            // check that we have enough characters
-                            if (i + 3 >= value.Length)
-                                throw new Exceptions.InvalidStringFormatException($"Tried escaping ASCII code but string was too short '{value}'");
-                            uint asciiCode = Convert.ToUInt32(value.Substring(i + 2, 2), 16);
-                            sb.Append((char)asciiCode);
-                            i += 3;
-                            continue;
-                        }
-                        throw new Exceptions.InvalidStringFormatException($"Unknown string escape code {value[i + 1]} in string '{value}'");
+                        throw new Exceptions.UnexpectedTokenException("Unexpected keyword " + nextTokens[0].Value);
                     }
-                    constValue = new StringValue(sb.ToString());
+                    // next instruction can be assignment, or fn_call
+                    // TODO: implement
+                }
+                return ret;
+            }
+
+            public IEvaluable ParseExpression()
+            {
+                // check for prefix operators
+                if (nextTokens[0].Type == Token.TokenType.Operator)
+                {
+                    if (nextTokens[0].Value == "+")
+                    {
+                        ++crnt;
+                        return new Expression(ParseExpression(), Expression.ExpressionOperator.Plus, null);
+                    }
+                    if (nextTokens[0].Value == "-")
+                    {
+                        ++crnt;
+                        return new Expression(ParseExpression(), Expression.ExpressionOperator.Minus, null);
+                    }
+                    if (nextTokens[0].Value == "!")
+                    {
+                        ++crnt;
+                        return new Expression(ParseExpression(), Expression.ExpressionOperator.LogicalNot, null);
+                    }
+                    throw new Exceptions.UnexpectedTokenException($"Expected unary operator but found '{nextTokens[0].Value}'");
+                }
+                // parse LHS
+                IEvaluable? lhs = null;
+                // first check for bracketed expression
+                if (nextTokens[0].Type == Token.TokenType.RoundBracket)
+                {
+                    if (nextTokens[0].Value == ")")
+                        throw new Exceptions.UnexpectedTokenException("Expected '(' but found ')' instead");
+                    ++crnt;
+                    // parse inner expression
+                    lhs = ParseExpression();
+                    if (nextTokens[0].Type != Token.TokenType.RoundBracket)
+                        throw new Exceptions.MissingTokenException("Expected round bracket but found " + nextTokens[0]);
+                    if (nextTokens[0].Value != ")")
+                        throw new Exceptions.UnexpectedTokenException("Expected ')' but found '(' instead");
+                    ++crnt;
+                }
+                // check for function definition
+                if (nextTokens[0].Type == Token.TokenType.Keyword && nextTokens[0].Value == "fun")
+                {
+                    ++crnt;
+                    List<(VarResolver, BaseValue.ValueType)> arguments = ParseFunctionHead();
+                    // find matching nfu
+                    int depth = 1;
+                    int matching_nfu = 0;
+                    for (int i = 0; i < nextTokens.Count; i++)
+                    {
+                        if (nextTokens[i].Type != Token.TokenType.Keyword)
+                            continue;
+                        if (nextTokens[i].Value == "fun")
+                            ++depth;
+                        if (nextTokens[i].Value == "nfu")
+                            --depth;
+                        if (depth == 0)
+                        {
+                            matching_nfu = i;
+                        }
+                    }
+                    if (matching_nfu == 0)
+                        throw new Exceptions.MissingTokenException("Couldn't find matching 'nfu' keyword");
+                    var body = new ProgramParser(nextTokens[..(matching_nfu - 1)]).ParseProgram();
+                    crnt = matching_nfu + 1;
+                    lhs = new FunctionValue()
+                }
+                
+                if (nextTokens[0].Type == Token.TokenType.Constant)
+                {
+                    ++crnt;
+                    if (nextTokens[0].Value[0] == '"')
+                        return new StringValue(nextTokens[0].Value[1..^1]);
+                    return new NumberValue(double.Parse(nextTokens[0].Value));
+                }
+                if (nextTokens[0].Type == Token.TokenType.EmptyObject)
+                {
+                    ++crnt;
+                    return new ObjectValue();
+                }
+                if (nextTokens[0].Type == Token.TokenType.VarType && nextTokens[0].Value == "nil")
+                {
+                    ++crnt;
+                    return NilValue.Nil;
+                }
+                // check for function definition
+
+            }
+
+            public VarResolver ParseVariable()
+            {
+                VarResolver current;
+                if (nextTokens[0].Type == Token.TokenType.Variable)
+                {
+                    ++crnt;
+                    current = VariableExpander.FromString(nextTokens[0].Value);
+                    while (nextTokens[0].Type == Token.TokenType.SquareBracket)
+                    {
+                        if (nextTokens[0].Value == "]")
+                            throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
+                        ++crnt;
+                        var expr = ParseExpression();
+                        if (nextTokens[0].Type != Token.TokenType.SquareBracket)
+                            throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
+                        if (nextTokens[0].Value != "]")
+                            throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
+                        ++crnt;
+                        current = new VarObjectResolver(current, expr);
+                    }
+                    return current;
                 }
                 else
                 {
-                    constValue = new NumberValue(double.Parse(value));
-                }
-            }
-            public override string ToString(int indent) => $"ConstantBlock({constValue})".Indent(indent);
-        }
-        public class VariableBlock : Block
-        {
-            public VarResolver resolver;
-            public VariableBlock(VarResolver resolver)
-            {
-                Type = BlockType.Variable;
-                this.resolver = resolver;
-            }
-            public override string ToString(int indent) => $"VariableBlock({resolver})".Indent(indent);
-        }
-        public class FunctionCallBlock : Block, IEvaluable
-        {
-            public VarResolver function;
-            public List<List<Block>> args;
-            public FunctionCallBlock(VarResolver function, List<Block> betweenBrackets)
-            {
-                Type = BlockType.FunctionCall;
-                this.function = function;
-                args = new();
-                if (betweenBrackets.Count == 0)
-                    return;
-                List<Block> currentArg = new();
-                int depth = 0;
-                foreach(var arg in betweenBrackets)
-                {
-                    if(arg.Type == BlockType.BaseToken)
+                    var baseExpr = ParseExpression();
+                    if (nextTokens[0].Type != Token.TokenType.SquareBracket)
+                        throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
+                    // manually parse first accessor
+                    if (nextTokens[0].Value == "]")
+                        throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
+                    ++crnt;
+                    var baseAccessor = ParseExpression();
+                    if (nextTokens[0].Type != Token.TokenType.SquareBracket)
+                        throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
+                    if (nextTokens[0].Value != "]")
+                        throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
+                    ++crnt;
+                    current = new ObjectAccessor(baseExpr, baseAccessor);
+                    while (nextTokens[0].Type == Token.TokenType.SquareBracket)
                     {
-                        var baseTk = ((BaseTokenBlock)arg).baseToken;
-                        if (baseTk.Type == Token.TokenType.RoundBracket)
-                        {
-                            if (baseTk.Value == "(")
-                                ++depth;
-                            else
-                                --depth;
-                        }
-                        if(baseTk.Type == Token.TokenType.Comma && depth == 0)
-                        {
-                            args.Add(currentArg);
-                            currentArg = new();
-                            continue;
-                        }
+                        if (nextTokens[0].Value == "]")
+                            throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
+                        ++crnt;
+                        var accessor = ParseExpression();
+                        if (nextTokens[0].Type != Token.TokenType.SquareBracket)
+                            throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
+                        if (nextTokens[0].Value != "]")
+                            throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
+                        ++crnt;
+                        current = new ObjectAccessor(current, accessor);
                     }
-                    currentArg.Add(arg);
+                    return current;
                 }
-                args.Add(currentArg);
-            }
-            public override string ToString(int indent)
-            {
-                string ret = $"FunctionCallBlock({function}, (".Indent(indent);
-                bool firstArg = true;
-                foreach(var argList in args)
-                {
-                    if (firstArg)
-                    {
-                        ret += "\n";
-                        firstArg = false;
-                    }
-                    ret += "(".Indent(indent + 2);
-                    bool fa2 = true;
-                    foreach (var arg in argList)
-                    {
-                        if(fa2)
-                        {
-                            ret += "\n";
-                            fa2 = false;
-                        }
-                        ret += arg.ToString(indent + 4) + ",\n";
-                    }
-                    ret += "),\n".Indent(indent + 2);
-                }
-                return ret + (ret.EndsWith('\n') ? "))".Indent(indent) : "))");
-            }
-            public BaseValue Evaluate(Scope currentScope)
-            {
-                FunctionValue fn = (FunctionValue)function.Resolve(currentScope);
-                var callable = (ICallable)fn.Value!;
-                callable.
             }
         }
 
-        public class EvaluableBlock : Block
+        public static class VariableExpander
         {
-            public List<Block> components;
-            public EvaluableBlock(List<Block> components)
+            public static VarResolver FromString(string full_var_name)
             {
-                Type = BlockType.Evaluable;
-                this.components = components;
-            }
-            public override string ToString(int indent)
-            {
-                string ret = "EvaluableBlock(\n".Indent(indent);
-                foreach (var comp in components)
-                    ret += comp.ToString(indent + 2) + ",\n";
-                return ret + ")".Indent(indent);
-            }
-        }
-
-        public class UnaryOperatorBlock : Block
-        {
-            public Token op;
-            public UnaryOperatorBlock(Token op)
-            {
-                Type = BlockType.Instructions;
-                this.op = op;
-            }
-            public override string ToString(int indent) => $"UnaryOperatorBlock({op})".Indent(indent);
-        }
-
-        public static class Blocker
-        {
-            public static List<Block> BlockTokens(List<Token> tokens)
-            {
-                int maxDepthRound = 0, maxDepthSquare = 0, maxDepthAll = 0;
-                int depthRound = 0, depthSquare = 0, depthAll = 0;
-                foreach(var token in tokens)
+                full_var_name = full_var_name[1..]; // skip over '$'
+                // check for simple name
+                int obj_acc = full_var_name.LastIndexOf(':');
+                if (obj_acc <= 0)
+                    return new VarNameResolver(full_var_name); // not object accessor
+                var split = full_var_name.Split(':');
+                if (split[0].Length == 0)
                 {
-                    if (token.Type == Token.TokenType.RoundBracket)
-                    {
-                        if (token.Value == "(")
-                        {
-                            ++depthRound;
-                            if (depthRound > maxDepthRound)
-                                maxDepthRound = depthRound;
-                            ++depthAll;
-                            if (depthAll > maxDepthAll)
-                                maxDepthAll = depthAll;
-                        }
-                        else
-                        {
-                            --depthRound;
-                            --depthAll;
-                        }
-                    }
-                    if(token.Type == Token.TokenType.SquareBracket)
-                    {
-                        if (token.Value == "[")
-                        {
-                            ++depthSquare;
-                            if (depthSquare > maxDepthSquare)
-                                maxDepthSquare = depthSquare;
-                            ++depthAll;
-                            if (depthAll > maxDepthAll)
-                                maxDepthAll = depthAll;
-                        }
-                        else
-                        {
-                            --depthSquare;
-                            --depthAll;
-                        }
-                    }
+                    split = split[1..];
+                    split[0] = ":" + split[0];
                 }
-
-                List<Block> blocks = tokens.Select(x => (Block)new BaseTokenBlock(x)).ToList();
-
-                blocks = ExtractConstants(blocks);
-                blocks = ExtractSimpleVariables(blocks);
-                blocks = ExtractFunctionCalls(blocks);
-                blocks = ConvertSimpleEvaluables(blocks);
-
-                for(int i = 0; i <= maxDepthRound; i++)
-                {
-                    blocks = ExtractUnaryOperators(blocks);
-                    blocks = ExtractEvaluables(blocks);
-                    blocks = ReExtractUnaryOperators(blocks);
-                }
-
-                for (int i = 0; i <= maxDepthSquare; i++)
-                    blocks = ExtractComplexVariables(blocks);
-                //blocks = ReConvertSimpleEvaluables(blocks);
-
-                return blocks;
-            }
-
-            static List<Block> ExtractConstants(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                foreach(var block in oldBlocks)
-                {
-                    block.IfHasBlocksExtract(ExtractConstants);
-                    if(block.Type != Block.BlockType.BaseToken)
-                    {
-                        blocks.Add(block);
-                        continue;
-                    }
-                    var crnt = (BaseTokenBlock)block;
-                    if(crnt.baseToken.Type != Token.TokenType.Constant)
-                    {
-                        blocks.Add(block);
-                        continue;
-                    }
-                    blocks.Add(new ConstantBlock(crnt.baseToken));
-                }
-                return blocks;
-            }
-
-            static VarResolver ResolverFromVariableName(string var_name)
-            {
-                var_name = var_name[1..]; // remove '$'
-                // simple name variable
-                if (!var_name.Contains(':') || var_name.LastIndexOf(':') == 0)
-                    return new VarNameResolver(var_name);
-                // object variable
-                int idx = var_name.IndexOf(':', 1);
-                VarResolver objResolver = new VarNameResolver(var_name[..idx]);
-                var_name = var_name[(idx + 1)..];
-                while (var_name.Contains(':'))
-                {
-                    idx = var_name.IndexOf(':');
-                    objResolver = new VarObjectResolver(objResolver, new StringValue(var_name[..idx]));
-                    var_name = var_name[(idx + 1)..];
-                }
-                objResolver = new VarObjectResolver(objResolver, new StringValue(var_name));
-                return objResolver;
-            }
-            static List<Block> ExtractSimpleVariables(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                foreach(var block in oldBlocks)
-                {
-                    block.IfHasBlocksExtract(ExtractSimpleVariables);
-                    if (block.Type != Block.BlockType.BaseToken)
-                    {
-                        blocks.Add(block);
-                        continue;
-                    }
-                    var crnt = (BaseTokenBlock)block;
-                    if(crnt.baseToken.Type != Token.TokenType.Variable)
-                    {
-                        blocks.Add(block);
-                        continue;
-                    }
-                    // convert variable names to blocks
-                    blocks.Add(new VariableBlock(ResolverFromVariableName(crnt.baseToken.Value)));
-                }
-                return blocks;
-            }
-
-            static List<Block> ExtractFunctionCalls(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                for(int i = 0; i < oldBlocks.Count; i++)
-                {
-                    if (oldBlocks[i].Type != Block.BlockType.Variable)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue; // function call can only be performed on a variable
-                    }
-                    if (i + 1 >= oldBlocks.Count)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue; // out of range
-                    }
-                    if (oldBlocks[i + 1].Type != Block.BlockType.BaseToken || ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Type != Token.TokenType.RoundBracket || ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Value != "(")
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue; // not function call
-                    }
-                    // find matching ')'
-                    int idx = i + 2;
-                    int depth = 1;
-                    while(depth > 0 && idx < oldBlocks.Count)
-                    {
-                        if (oldBlocks[idx].Type != Block.BlockType.BaseToken)
-                        {
-                            ++idx;
-                            continue;
-                        }
-                        var tkBlock = (BaseTokenBlock)oldBlocks[idx];
-                        if(tkBlock.baseToken.Type != Token.TokenType.RoundBracket)
-                        {
-                            ++idx;
-                            continue;
-                        }
-                        if (tkBlock.baseToken.Value == "(")
-                            ++depth;
-                        else
-                            --depth;
-                        ++idx;
-                    }
-                    blocks.Add(new FunctionCallBlock(((VariableBlock)oldBlocks[i]).resolver, oldBlocks[(i + 2)..(idx - 1)]));
-                    blocks.Last().IfHasBlocksExtract(ExtractFunctionCalls);
-                    i = idx - 1;
-                }
-                return blocks;
-            }
-
-            static List<Block> ConvertSimpleEvaluables(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                foreach(var block in oldBlocks)
-                {
-                    block.IfHasBlocksExtract(ConvertSimpleEvaluables);
-                    if (block.Type == Block.BlockType.Constant || block.Type == Block.BlockType.FunctionCall)
-                        blocks.Add(new EvaluableBlock([block]));
-                    else
-                        blocks.Add(block);
-                }
-                return blocks;
-            }
-
-            static List<Block> ExtractUnaryOperators(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                // unary operators can be applied if:
-                // \null + a -> [+a]
-                // (not: ev, ')') + a -> [+a]
-                bool shouldReExtract = false;
-                for(int i = 0; i < oldBlocks.Count; i++)
-                {
-                    if (oldBlocks[i].Type != Block.BlockType.BaseToken || i + 1 >= oldBlocks.Count)
-                    {
-                        oldBlocks[i].IfHasBlocksExtract(ExtractUnaryOperators);
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    var baseTk = ((BaseTokenBlock)oldBlocks[i]).baseToken;
-                    if(baseTk.Type != Token.TokenType.Operator)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    if(baseTk.Value != "+" && baseTk.Value != "-" && baseTk.Value != "!")
-                    { // this operator can't be unary
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    // operator is binary
-                    if(i > 0 && (oldBlocks[i - 1].Type == Block.BlockType.Evaluable || oldBlocks[i - 1].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i - 1]).baseToken.Type == Token.TokenType.RoundBracket && ((BaseTokenBlock)oldBlocks[i - 1]).baseToken.Value == ")" || oldBlocks[i - 1].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i - 1]).baseToken.Type == Token.TokenType.SquareBracket && ((BaseTokenBlock)oldBlocks[i - 1]).baseToken.Value == "]"))
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    if (oldBlocks[i + 1].Type == Block.BlockType.Evaluable)
-                    {
-                        // mark as UnaryOperator, integrate into evaluable
-                        ((BaseTokenBlock)oldBlocks[i]).baseToken.Type = Token.TokenType.UnaryOperator;
-                        blocks.Add(new EvaluableBlock([oldBlocks[i], .. ((EvaluableBlock)oldBlocks[i + 1]).components]));
-                        i++;
-                        shouldReExtract = true;
-                        continue;
-                    }
-                    if(oldBlocks[i + 1].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Type == Token.TokenType.RoundBracket && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Value == "(" || oldBlocks[i + 1].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Type == Token.TokenType.SquareBracket && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Value == "[")
-                    {
-                        // mark token as UnaryOperator, will be later picked up by re-extracting unary operators
-                        ((BaseTokenBlock)oldBlocks[i]).baseToken.Type = Token.TokenType.UnaryOperator;
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    blocks.Add(oldBlocks[i]);
-                }
-                if (shouldReExtract)
-                    return ExtractUnaryOperators(blocks);
-                return blocks;
-            }
-
-            static List<Block> ExtractEvaluables(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                // evaluables can be extended if:
-                // (a) -> a
-                // a + b -> [a+b]
-                // a,b - evaluable ; + - operator ; [a+b] -> new evaluable from a, +, b
-                bool shouldReExtract = false;
-                for(int i = 0; i < oldBlocks.Count; i++)
-                {
-                    oldBlocks[i].IfHasBlocksExtract(ExtractEvaluables);
-                    if(i + 2 >= oldBlocks.Count)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    // (a) -> [(a)]
-                    if (oldBlocks[i].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i]).baseToken.Type == Token.TokenType.RoundBracket && ((BaseTokenBlock)oldBlocks[i]).baseToken.Value == "(" &&
-                        oldBlocks[i + 1].Type == Block.BlockType.Evaluable &&
-                        oldBlocks[i + 2].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i + 2]).baseToken.Type == Token.TokenType.RoundBracket && ((BaseTokenBlock)oldBlocks[i + 2]).baseToken.Value == ")")
-                    {
-                        blocks.Add(new EvaluableBlock([oldBlocks[i], .. ((EvaluableBlock)oldBlocks[i + 1]).components, oldBlocks[i + 2]]));
-                        i += 2;
-                        shouldReExtract = true;
-                        continue;
-                    }
-                    // a + b -> [a+b]
-                    if (oldBlocks[i].Type == Block.BlockType.Evaluable &&
-                        oldBlocks[i + 1].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Type == Token.TokenType.Operator &&
-                        oldBlocks[i + 2].Type == Block.BlockType.Evaluable)
-                    {
-                        blocks.Add(new EvaluableBlock([.. ((EvaluableBlock)oldBlocks[i]).components, oldBlocks[i + 1], .. ((EvaluableBlock)oldBlocks[i + 2]).components]));
-                        i += 2;
-                        shouldReExtract = true;
-                        continue;
-                    }
-                    blocks.Add(oldBlocks[i]);
-                }
-                if(shouldReExtract)
-                    return ExtractEvaluables(blocks);
-                return blocks;
-            }
-
-            static List<Block> ReExtractUnaryOperators(List<Block> oldBlocks)
-            {
-                List<Block> blocks = new();
-                bool shouldReExtract = false;
-                for(int i = 0; i < oldBlocks.Count; i++)
-                {
-                    if (oldBlocks[i].Type != Block.BlockType.BaseToken)
-                    {
-                        oldBlocks[i].IfHasBlocksExtract(ReExtractUnaryOperators);
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    var baseTk = (BaseTokenBlock)oldBlocks[i];
-                    if(baseTk.baseToken.Type != Token.TokenType.UnaryOperator)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    if (oldBlocks[i + 1].Type != Block.BlockType.Evaluable)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue; // multiple unary operators
-                    }
-                    shouldReExtract = true;
-                    blocks.Add(new EvaluableBlock([oldBlocks[i], .. ((EvaluableBlock)oldBlocks[i + 1]).components]));
-                    i++;
-                    continue;
-                }
-                if (shouldReExtract)
-                    return ReExtractUnaryOperators(blocks);
-                return blocks;
-            }
-
-            static List<Block> ExtractComplexVariables(List<Block> oldBlocks)
-            {
-                // varblock '[' evalblock ']' -> varblock
-                // varblock '[' varblock ']'  -> varblock
-                bool condition(int i, Block.BlockType name_type, bool bypassFirst = false)
-                {
-                    if (i + 3 >= oldBlocks.Count)
-                        return false;
-                    return
-                        (oldBlocks[i].Type == Block.BlockType.Variable || bypassFirst) &&
-                        oldBlocks[i + 1].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Type == Token.TokenType.SquareBracket && ((BaseTokenBlock)oldBlocks[i + 1]).baseToken.Value == "[" &&
-                        oldBlocks[i + 2].Type == name_type &&
-                        oldBlocks[i + 3].Type == Block.BlockType.BaseToken && ((BaseTokenBlock)oldBlocks[i + 3]).baseToken.Type == Token.TokenType.SquareBracket && ((BaseTokenBlock)oldBlocks[i + 3]).baseToken.Value == "]";
-                }
-                List<Block> blocks = new();
-                for(int i = 0; i < oldBlocks.Count; i++)
-                {
-                    oldBlocks[i].IfHasBlocksExtract(ExtractComplexVariables);
-                    if(i + 3 >=  oldBlocks.Count)
-                    {
-                        blocks.Add(oldBlocks[i]);
-                        continue;
-                    }
-                    VariableBlock? prevBlock = null;
-                    if (condition(i, Block.BlockType.Evaluable, prevBlock != null) || condition(i, Block.BlockType.Variable, prevBlock != null))
-                    {
-                        while (condition(i, Block.BlockType.Evaluable, prevBlock != null) || condition(i, Block.BlockType.Variable, prevBlock != null))
-                        {
-                            while (condition(i, Block.BlockType.Evaluable, prevBlock != null))
-                            {
-                                if (prevBlock != null)
-                                    prevBlock = new VariableBlock(new VarObjectResolver(prevBlock.resolver, ExpressionParser.ParseEvaluable(((EvaluableBlock)oldBlocks[i + 2]).components)));
-                                else
-                                    prevBlock = new VariableBlock(new VarObjectResolver(((VariableBlock)oldBlocks[i]).resolver, ExpressionParser.ParseEvaluable(((EvaluableBlock)oldBlocks[i + 2]).components)));
-                                i += 3;
-                                continue;
-                            }
-                            while (condition(i, Block.BlockType.Variable, prevBlock != null))
-                            {
-                                if (prevBlock != null)
-                                    prevBlock = new VariableBlock(new VarObjectResolver(prevBlock.resolver, ((VariableBlock)oldBlocks[i + 2]).resolver));
-                                else
-                                    prevBlock = new VariableBlock(new VarObjectResolver(((VariableBlock)oldBlocks[i]).resolver, ((VariableBlock)oldBlocks[i + 2]).resolver));
-                                i += 3;
-                                continue;
-                            }
-                        }
-                        blocks.Add(prevBlock!);
-                        continue;
-                    }
-                    blocks.Add(oldBlocks[i]);
-                }
-                return blocks;
-            }
-        }
-
-        public static class ExpressionParser
-        {
-            public static IEvaluable ParseEvaluable(List<Block> blocks)
-            {
-                if (blocks.Count == 1)
-                {
-                    if(blocks[0].Type == Block.BlockType.Constant)
-                        return ((ConstantBlock)blocks[0]).constValue;
-                    if (blocks[0].Type == Block.BlockType.FunctionCall)
-                        return ((FunctionCallBlock)blocks[0]).
-                }
-                // find top-level operators
-                List<Token> operators = new();
-                int depth = 0;
-                foreach(var block in blocks)
-                {
-                    if (block.Type != Block.BlockType.BaseToken)
-                        continue;
-                    var baseTk = ((BaseTokenBlock)block).baseToken;
-                    if(baseTk.Type == Token.TokenType.RoundBracket)
-                    {
-                        if (baseTk.Value == "(")
-                            ++depth;
-                        else
-                            --depth;
-                    }
-                    if (baseTk.Type == Token.TokenType.Operator && depth == 0)
-                        operators.Add(baseTk);
-                }
-                return null;
+                VarResolver baseVar = new VarNameResolver(split[0]);
+                for (int i = 1; i < split.Length; i++)
+                    baseVar = new VarObjectResolver(baseVar, new StringValue(split[i]));
+                return baseVar;
             }
         }
     }
@@ -1550,6 +1288,12 @@ namespace Automata
         public class InvalidUnaryOperatorException : Exception
         {
             public InvalidUnaryOperatorException(string message) : base(message) { }
+        }
+
+        [Serializable]
+        public class MissingTokenException : Exception
+        {
+            public MissingTokenException(string message) : base(message) { }
         }
     }
 
