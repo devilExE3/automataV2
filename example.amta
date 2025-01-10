@@ -47,3 +47,12 @@ $:array_push($my_arr, 3)
 $:print($my_arr)
 $:array_pop($my_arr)
 $:print($:array_pop($my_arr))
+
+$a = fun()
+  $:print("hello!")
+nfu
+$a()
+
+$:print(fun()
+    return "hello"
+nfu())

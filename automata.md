@@ -42,13 +42,22 @@ $:print($my_var)
 ```
 ```
 $a = "Hello"
-$fun = fun($a string)
+$fun = fun($!a string)
     $:print($a)
 nfu
 $fun("World!")
 $:print($a)
 
 # output: World!Hello
+
+# NOTE: if you don't declare function parameter with '!', it will instead assign to the outer $a
+$a = "Hello"
+$fun = fun($a string)
+    $:print($a)
+nfu
+$fun("World!")
+$:print($a)
+# output : World!World!
 ```
 Variables can be deleted by assigning `nil` to them
 ```
@@ -198,11 +207,13 @@ Note that depending on the implementation, some functions may be removed or adde
 - `$:print($value)` - print an expression / variable.
 - `$:pow($a number, $b number)` - returns $a to the power of $b.
 - `$:range($a number)` - will return array-convention with all whole numbers from 0 to but not including `$a`
-- `$:range($a number, $b number)` - will return array-convention with all whole numbers from `$a` to but not including `$b`
-- `$:range($a number, $b number, $step number)` - will return array-convention with whole numbers starting from `$a` to but not including `$b` with increments of `$step`
+- `$:range2($a number, $b number)` - will return array-convention with all whole numbers from `$a` to but not including `$b`
+- `$:range3($a number, $b number, $step number)` - will return array-convention with whole numbers starting from `$a` to but not including `$b` with increments of `$step`
 - `$:typeof($a)` - will return the type of `$a` as a string: "number", "string", "object", "function" or "nil"
-- `$:ascii($a number)` - will return ascii code `$a` character as a string if $a is whole from 0 to 255, otherwise it will return `nil`
-- `$:ascii($a string)` - will return ascii code of `$a` if $a is a single character and is ascii, otherwise it will return `nil`
+- `$:asciiC($a number)` - will return ascii code `$a` character as a string if $a is whole from 0 to 255, otherwise it will return `nil`
+- `$:asciiN($a string)` - will return ascii code of `$a` if $a is a single character and is ascii, otherwise it will return `nil`
+- `$:stoa($s string)` - will convert string to array-convention containing all characters as single-character strings
+- `$:atos($v object)` - will concat all values of array-convention to string
 - `$:isarray($a object)` - returns 1 if `$a` is array-convention, 0 otherwise
 # Default implementation
 ## Parsing

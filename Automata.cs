@@ -28,7 +28,8 @@ namespace Automata
             public ValueType Type;
             public object? Value;
             public BaseValue Evaluate(Scope currentScope) => this;
-            public abstract StringValue Stringify();
+            public StringValue Stringify() => Stringify(0);
+            public abstract StringValue Stringify(int indent);
             public override bool Equals(object? obj)
             {
                 if (obj is not BaseValue objBV) return false;
@@ -65,7 +66,7 @@ namespace Automata
                 Type = ValueType.Number;
                 Value = value;
             }
-            public override StringValue Stringify() => new(((double)Value!).ToString());
+            public override StringValue Stringify(int _) => new(((double)Value!).ToString());
             public override bool Equals(BaseValue other)
             {
                 if (other.Type != ValueType.Number)
@@ -80,12 +81,48 @@ namespace Automata
                 Type = ValueType.String;
                 Value = value;
             }
-            public override StringValue Stringify() => this;
+            public override StringValue Stringify(int _) => this;
             public override bool Equals(BaseValue other)
             {
                 if (other.Type != ValueType.String)
                     return false;
                 return (string)Value! == (string)other.Value!;
+            }
+            public static string EscapeString(string str)
+            {
+                StringBuilder sb = new();
+                for (int i = 0; i < str.Length; i++)
+                {
+                    if (str[i] != '\\')
+                    {
+                        sb.Append(str[i]);
+                        continue;
+                    }
+                    if (str[i + 1] == '\\' || str[i + 1] == '"')
+                    {
+                        sb.Append(str[i + 1]);
+                        i++;
+                        continue;
+                    }
+                    if (str[i + 1] == 'n')
+                    {
+                        sb.Append('\n');
+                        i++;
+                        continue;
+                    }
+                    if (str[i + 1] == 'x')
+                    {
+                        // check that we have enough characters
+                        if (i + 3 >= str.Length)
+                            throw new Exceptions.InvalidStringFormatException($"Tried escaping ASCII code but string was too short '{str}'");
+                        int asciiCode = Convert.ToInt32(str.Substring(i + 2, 2), 16);
+                        sb.Append(char.ConvertFromUtf32(asciiCode));
+                        i += 3;
+                        continue;
+                    }
+                    throw new Exceptions.InvalidStringFormatException($"Unknown string escape code {str[i + 1]} in string '{str}'");
+                }
+                return sb.ToString();
             }
         }
         public class ObjectValue : BaseValue
@@ -95,12 +132,11 @@ namespace Automata
                 Type = ValueType.Object;
                 Value = new Dictionary<string, BaseValue>();
             }
-            public override StringValue Stringify() => Stringify(0);
-            public StringValue Stringify(int indent)
+            public override StringValue Stringify(int indent)
             {
-                string ret = "{\n".Indent(indent);
+                string ret = "{\n";
                 foreach (var value in (Dictionary<string, BaseValue>)Value!)
-                    ret += ("  " + value.Key + ": " + value.Value.Stringify()).Indent(indent) + "\n";
+                    ret += (value.Key + ": " + value.Value.Stringify(indent + 2)).Indent(indent + 2) + "\n";
                 ret += "}".Indent(indent);
                 return new StringValue(ret);
             }
@@ -137,7 +173,7 @@ namespace Automata
                 if (len < 0 || len != Math.Floor(len)) return false; // length value is negative / not whole
                 if (dict.Keys.Count != (int)len + 1) return false; // There should be length + 1 keys
                 var keys = Enumerable.Range(0, (int)len);
-                return dict.Keys.All(x => keys.Contains(int.Parse(x)));
+                return dict.Keys.Where(x => x != "length").All(x => keys.Contains(int.Parse(x)));
             }
         }
         public class FunctionValue : BaseValue
@@ -147,7 +183,7 @@ namespace Automata
                 Type = ValueType.Function;
                 Value = value;
             }
-            public override StringValue Stringify()
+            public override StringValue Stringify(int _)
             {
                 string ret = "fun(";
                 bool firstParam = true;
@@ -157,7 +193,7 @@ namespace Automata
                         ret += ", ";
                     else
                         firstParam = false;
-                    ret += param;
+                    ret += param.Item1 + " " + param.Item2;
                 }
                 return new StringValue(ret + ")");
             }
@@ -179,7 +215,7 @@ namespace Automata
                 Type = ValueType.Nil,
                 Value = null
             };
-            public override StringValue Stringify() => new("<nil>");
+            public override StringValue Stringify(int _) => new("<nil>");
             public override bool Equals(BaseValue other)
             {
                 return other.Type == ValueType.Nil;
@@ -225,6 +261,27 @@ namespace Automata
             }
         }
 
+        public class NativeFunction : ICallable
+        {
+            public delegate BaseValue nativeFn(BaseValue[] args);
+            List<(VarResolver, BaseValue.ValueType)> head;
+            public List<(VarResolver, BaseValue.ValueType)> Head => head;
+            nativeFn fn;
+            public NativeFunction(List<(VarResolver, BaseValue.ValueType)> head, nativeFn fn)
+            {
+                this.head = head;
+                this.fn = fn;
+            }
+            public BaseValue Call(Scope currentScope)
+            {
+                // extract variables
+                List<BaseValue> args_eval = [];
+                foreach(var arg in head)
+                    args_eval.Add(arg.Item1.Evaluate(currentScope));
+                return fn(args_eval.ToArray());
+            }
+        }
+
         public interface IEvaluable
         {
             public BaseValue Evaluate(Scope currentScope);
@@ -257,6 +314,45 @@ namespace Automata
                 Equal,
                 NotEqual,
                 LogicalNot,
+                LogicalAnd,
+                LogicalOr,
+            }
+
+            public static ExpressionOperator OperatorFromString(string op)
+            {
+                switch(op)
+                {
+                    case "+":
+                        return ExpressionOperator.Plus;
+                    case "-":
+                        return ExpressionOperator.Minus;
+                    case "*":
+                        return ExpressionOperator.Times;
+                    case "/":
+                        return ExpressionOperator.Div;
+                    case "%":
+                        return ExpressionOperator.Modulo;
+                    case "<":
+                        return ExpressionOperator.Less;
+                    case "<=":
+                        return ExpressionOperator.LessEqual;
+                    case ">":
+                        return ExpressionOperator.Greater;
+                    case ">=":
+                        return ExpressionOperator.GreaterEqual;
+                    case "==":
+                        return ExpressionOperator.Equal;
+                    case "!=":
+                        return ExpressionOperator.NotEqual;
+                    case "!":
+                        return ExpressionOperator.LogicalNot;
+                    case "&&":
+                        return ExpressionOperator.LogicalAnd;
+                    case "||":
+                        return ExpressionOperator.LogicalOr;
+                    default:
+                        throw new Exceptions.UnknownTokenException($"Couldn't convert '{op}' to an operator");
+                }
             }
 
             public BaseValue Evaluate(Scope currentScope)
@@ -353,9 +449,62 @@ namespace Automata
                         return new NumberValue(lhs_value.Equals(rhs_value!) ? 0 : 1);
                     case ExpressionOperator.LogicalNot:
                         return new NumberValue(lhs_value.HoldsTrue() ? 0 : 1);
-
+                    case ExpressionOperator.LogicalAnd:
+                    {
+                        if (rhs == null)
+                            throw new Exceptions.NullOperandException("RHS", "LogicalAnd");
+                        var lhs_eval = lhs_value.HoldsTrue();
+                        var rhs_eval = rhs_value!.HoldsTrue();
+                        return new NumberValue(lhs_eval && rhs_eval ? 1 : 0);
+                    }
+                    case ExpressionOperator.LogicalOr:
+                    {
+                        if (rhs == null)
+                            throw new Exceptions.NullOperandException("RHS", "LogicalOr");
+                        var lhs_eval = lhs_value.HoldsTrue();
+                        var rhs_eval = rhs_value!.HoldsTrue();
+                        return new NumberValue(lhs_eval || rhs_eval ? 1 : 0);
+                    }
                 }
                 return NilValue.Nil;
+            }
+        }
+
+        public class FunctionCall : IEvaluable
+        {
+            IEvaluable function;
+            List<IEvaluable> parameters;
+            public FunctionCall(IEvaluable function, List<IEvaluable> parameters)
+            {
+                this.function = function;
+                this.parameters = parameters;
+            }
+
+            public BaseValue Evaluate(Scope currentScope)
+            {
+                var res = function.Evaluate(currentScope);
+                if (res.Type != BaseValue.ValueType.Function)
+                    throw new Exceptions.VariableTypeException($"Tried calling non-function value {res.Stringify().Value}");
+                var fn = (ICallable)res.Value!;
+                // ensure parameter count
+                if (fn.Head.Count != parameters.Count)
+                    throw new Exceptions.InvalidParametersException($"Parameter count of {parameters.Count} doesn't match Head of {res.Stringify().Value}");
+                // evaluate parameters
+                List<BaseValue> eval = parameters.Select(x => x.Evaluate(currentScope)).ToList();
+                // ensure parameter type
+                for (int i = 0; i < parameters.Count; i++)
+                {
+                    if (fn.Head[i].Item2 == BaseValue.ValueType.AnyType) continue;
+                    if (fn.Head[i].Item2 != eval[i].Type)
+                        throw new Exceptions.InvalidParametersException($"Parameter {i} {eval[i].Stringify().Value} type {eval[i].Type} doesn't match Head {fn.Head[i]}");
+                }
+                // scope the function
+                Scope fnScope = new(currentScope);
+                // pass the arguments on the scope
+                for (int i = 0; i < parameters.Count; i++)
+                    fn.Head[i].Item1.Assign(fnScope, eval[i]);
+                // call the function
+                return fn.Call(fnScope);
             }
         }
 
@@ -401,6 +550,8 @@ namespace Automata
                     return NilValue.Nil;
                 if (var_name.StartsWith(':') || var_name.StartsWith('!'))
                     var_name = var_name[1..];
+                if (!var_scope.variables.ContainsKey(var_name))
+                    return NilValue.Nil;
                 return var_scope.variables[var_name];
             }
             public void SetVariable(string var_name, BaseValue value)
@@ -515,39 +666,15 @@ namespace Automata
         }
         public class FunCallInstruction : Instruction
         { // this instruction is used when ignoring return type
-            VarResolver function;
-            List<IEvaluable> parameters;
-            public FunCallInstruction(VarResolver fun, List<IEvaluable> paramz)
+            IEvaluable functionCall;
+            public FunCallInstruction(IEvaluable functionCall)
             {
                 Type = InstructionType.FunCall;
-                function = fun;
-                parameters = paramz;
+                this.functionCall = functionCall;
             }
             public override void Execute(Scope currentScope)
             {
-                var res = function.Resolve(currentScope);
-                if (res.Type != BaseValue.ValueType.Function)
-                    throw new Exceptions.VariableTypeException($"Tried calling non-function value {res.Stringify().Value}");
-                var fn = (ICallable)res.Value!;
-                // ensure parameter count
-                if (fn.Head.Count != parameters.Count)
-                    throw new Exceptions.InvalidParametersException($"Parameter count of {parameters.Count} doesn't match Head of {res.Stringify().Value}");
-                // evaluate parameters
-                List<BaseValue> eval = parameters.Select(x => x.Evaluate(currentScope)).ToList();
-                // ensure parameter type
-                for(int i = 0; i < parameters.Count; i++)
-                {
-                    if (fn.Head[i].Item2 == BaseValue.ValueType.AnyType) continue;
-                    if (fn.Head[i].Item2 != eval[i].Type)
-                        throw new Exceptions.InvalidParametersException($"Parameter {i} {eval[i].Stringify().Value} type {eval[i].Type} doesn't match Head {fn.Head[i]}");
-                }
-                // scope the function
-                Scope fnScope = new(currentScope);
-                // pass the arguments on the scope
-                for (int i = 0; i < parameters.Count; i++)
-                    fn.Head[i].Item1.Assign(fnScope, eval[i]);
-                // call the function
-                fn.Call(fnScope);
+                functionCall.Evaluate(currentScope); // invoke the function
             }
         }
         public class IfBlocksInstruction : Instruction
@@ -644,6 +771,7 @@ namespace Automata
             public IEvaluable returnValue;
             public FunctionReturnInstruction(IEvaluable returnValue)
             {
+                Type = InstructionType.FunctionReturn;
                 this.returnValue = returnValue;
             }
             public override void Execute(Scope currentScope) => throw new FunctionRunner.ReturnValue(returnValue.Evaluate(currentScope));
@@ -966,7 +1094,11 @@ namespace Automata
             int crnt = 0;
             public ProgramParser(List<Token> tokens)
             {
-                this.tokens = tokens;
+                // step over any blank newlines
+                int i;
+                for (i = 0; i < tokens.Count && tokens[i].Type == Token.TokenType.NewLine; i++) { }
+
+                this.tokens = tokens[i..];
             }
             List<Token> nextTokens => tokens[crnt..];
 
@@ -975,6 +1107,8 @@ namespace Automata
                 List<Instruction> ret = [];
                 while(nextTokens.Count > 0)
                 {
+                    // step over any NL
+                    while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.NewLine) ++crnt;
                     if (nextTokens[0].Type == Token.TokenType.Keyword)
                     {
                         if (nextTokens[0].Value == "if")
@@ -1006,14 +1140,14 @@ namespace Automata
                             {
                                 // only parse true block
                                 var true_block = new ProgramParser(nextTokens[..(match_fi - 1)]).ParseProgram();
-                                crnt = match_fi + 1;
+                                crnt += match_fi + 1;
                                 ret.Add(new IfBlocksInstruction(expr, true_block, null));
                             }
                             else
                             {
                                 var true_block = new ProgramParser(nextTokens[..(match_el - 1)]).ParseProgram();
                                 var false_block = new ProgramParser(nextTokens[(match_el + 1)..(match_fi - 1)]).ParseProgram();
-                                crnt = match_fi + 1;
+                                crnt += match_fi + 1;
                                 ret.Add(new IfBlocksInstruction(expr, true_block, false_block));
                             }
                             continue;
@@ -1042,7 +1176,7 @@ namespace Automata
                                 throw new Exceptions.MissingTokenException("Couldn't find matching 'ewhil' keyword");
                             var body = new ProgramParser(nextTokens[..(match_ewhil - 1)]).ParseProgram();
                             ret.Add(new WhileBlocksInstruction(expr, body));
-                            crnt = match_ewhil + 1;
+                            crnt += match_ewhil + 1;
                             continue;
                         }
                         if (nextTokens[0].Value == "for")
@@ -1070,13 +1204,44 @@ namespace Automata
                                 throw new Exceptions.MissingTokenException("Couldn't find matching 'rfo' keyword");
                             var body = new ProgramParser(nextTokens[..(match_rfo - 1)]).ParseProgram();
                             ret.Add(new ForBlocksInstruction(variable, expr, body));
-                            crnt = match_rfo + 1;
+                            crnt += match_rfo + 1;
+                            continue;
+                        }
+                        if (nextTokens[0].Value == "return")
+                        {
+                            ++crnt;
+                            // check if return is nil
+                            IEvaluable retVal;
+                            if (nextTokens.Count == 0 || nextTokens[0].Type == Token.TokenType.NewLine)
+                            {
+                                ++crnt;
+                                retVal = NilValue.Nil;
+                            }
+                            else
+                            {
+                                retVal = ParseExpression();
+                            }
+                            ret.Add(new FunctionReturnInstruction(retVal));
                             continue;
                         }
                         throw new Exceptions.UnexpectedTokenException("Unexpected keyword " + nextTokens[0].Value);
                     }
                     // next instruction can be assignment, or fn_call
-                    // TODO: implement
+                    // check if line contains '='
+                    int nextNL = nextTokens.FindIndex(x => x.Type == Token.TokenType.NewLine);
+                    int nextEq = nextTokens.FindIndex(x => x.Type == Token.TokenType.Assign);
+                    if(nextEq != -1 && (nextNL == -1 || nextEq < nextNL))
+                    {
+                        // var assign
+                        var variable = ParseVariable();
+                        ++crnt; // step over '='
+                        var res = ParseExpression();
+                        ret.Add(new VarAssignInstruction(variable, res));
+                        continue;
+                    }
+                    // fn_call
+                    var fn = ParseExpression();
+                    ret.Add(new FunCallInstruction(fn));
                 }
                 return ret;
             }
@@ -1092,26 +1257,7 @@ namespace Automata
 
             public IEvaluable ParseExpression()
             {
-                // check for prefix operators
-                if (nextTokens[0].Type == Token.TokenType.Operator)
-                {
-                    if (nextTokens[0].Value == "+")
-                    {
-                        ++crnt;
-                        return new Expression(ParseExpression(), Expression.ExpressionOperator.Plus, null);
-                    }
-                    if (nextTokens[0].Value == "-")
-                    {
-                        ++crnt;
-                        return new Expression(ParseExpression(), Expression.ExpressionOperator.Minus, null);
-                    }
-                    if (nextTokens[0].Value == "!")
-                    {
-                        ++crnt;
-                        return new Expression(ParseExpression(), Expression.ExpressionOperator.LogicalNot, null);
-                    }
-                    throw new Exceptions.UnexpectedTokenException($"Expected unary operator but found '{nextTokens[0].Value}'");
-                }
+                int skipWhenReturning = 0;
                 // end of expression can be:
                 // unbalanced closed ')' or ']'
                 // comma in root
@@ -1147,6 +1293,15 @@ namespace Automata
                         break; // comma in root
                     if (depth_r == -1 || depth_s == -1)
                         break; // unbalanced ')' or ']'
+                    ++end_of_expr;
+                }
+
+                // check if expression is (expr)
+                while(nextTokens[0].Type == Token.TokenType.RoundBracket && nextTokens[0].Value == "(" && nextTokens[end_of_expr - 1].Type == Token.TokenType.RoundBracket && nextTokens[end_of_expr - 1].Value == ")")
+                {
+                    ++crnt;
+                    end_of_expr -= 2;
+                    ++skipWhenReturning;
                 }
 
                 // split by last-eval operator
@@ -1154,40 +1309,92 @@ namespace Automata
                 {
                     List<IEvaluable> innerExpr = [];
                     List<Expression.ExpressionOperator> operators = [];
+                    int prev_start = 0;
+                    depth_r = 0;
+                    depth_s = 0;
                     for(int i = 0; i < end_of_expr; i++)
                     {
+                        if (nextTokens[i].Type == Token.TokenType.RoundBracket)
+                        {
+                            if (nextTokens[i].Value == "(")
+                                ++depth_s;
+                            else
+                                --depth_s;
+                            continue;
+                        }
+                        if (nextTokens[i].Type == Token.TokenType.SquareBracket)
+                        {
+                            if (nextTokens[i].Value == "[")
+                                ++depth_r;
+                            else
+                                --depth_r;
+                            continue;
+                        }
+                        if (depth_r > 0 || depth_s > 0)
+                            continue;
                         if (nextTokens[i].Type != Token.TokenType.Operator)
+                            continue;
+                        if (i > 0 && nextTokens[i - 1].Type == Token.TokenType.Operator || i == 0)
                             continue;
                         if (op_order.Contains(nextTokens[i].Value))
                         {
-                            innerExpr.Add(new ProgramParser(nextTokens[..(i - 1)]).ParseExpression());
-                            operators.Add( )
+                            innerExpr.Add(new ProgramParser(nextTokens[(prev_start)..(i)]).ParseExpression());
+                            operators.Add(Expression.OperatorFromString(nextTokens[i].Value));
+                            prev_start = i + 1;
                         }
                     }
+                    if (innerExpr.Count == 0) continue; // no more infix operators or prefix operators only
+                    innerExpr.Add(new ProgramParser(nextTokens[prev_start..(end_of_expr)]).ParseExpression());
+                    // construct tree
+                    IEvaluable current = innerExpr[0];
+                    for (int i = 1; i < innerExpr.Count; i++)
+                        current = new Expression(current, operators[i - 1], innerExpr[i]);
+                    crnt += end_of_expr;
+                    crnt += skipWhenReturning;
+                    return current;
                 }
-                
 
-                // parse LHS
                 IEvaluable? lhs = null;
-                // first check for bracketed expression
-                if (nextTokens[0].Type == Token.TokenType.RoundBracket)
+
+                // check for prefix operators
+                while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.Operator)
                 {
-                    if (nextTokens[0].Value == ")")
-                        throw new Exceptions.UnexpectedTokenException("Expected '(' but found ')' instead");
-                    ++crnt;
-                    // parse inner expression
-                    lhs = ParseExpression();
-                    if (nextTokens[0].Type != Token.TokenType.RoundBracket)
-                        throw new Exceptions.MissingTokenException("Expected round bracket but found " + nextTokens[0]);
-                    if (nextTokens[0].Value != ")")
-                        throw new Exceptions.UnexpectedTokenException("Expected ')' but found '(' instead");
-                    ++crnt;
+                    if (nextTokens[0].Value == "+")
+                    {
+                        ++crnt;
+                        --end_of_expr;
+                        var ret = new Expression(ParseExpression(), Expression.ExpressionOperator.Plus, null);
+                        crnt += skipWhenReturning;
+                        return ret;
+                    }
+                    if (nextTokens[0].Value == "-")
+                    {
+                        ++crnt;
+                        --end_of_expr;
+                        var ret = new Expression(ParseExpression(), Expression.ExpressionOperator.Minus, null);
+                        crnt += skipWhenReturning;
+                        return ret;
+                    }
+                    if (nextTokens[0].Value == "!")
+                    {
+                        ++crnt;
+                        --end_of_expr;
+                        var ret = new Expression(ParseExpression(), Expression.ExpressionOperator.LogicalNot, null);
+                        crnt += skipWhenReturning;
+                        return ret;
+                    }
+                    throw new Exceptions.UnexpectedTokenException($"Expected unary operator but found '{nextTokens[0].Value}'");
                 }
+
+
                 // check for function definition
-                if (nextTokens[0].Type == Token.TokenType.Keyword && nextTokens[0].Value == "fun")
+                if (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.Keyword && nextTokens[0].Value == "fun")
                 {
                     ++crnt;
+                    --end_of_expr;
+                    var old_crnt = crnt;
                     List<(VarResolver, BaseValue.ValueType)> arguments = ParseFunctionHead();
+                    end_of_expr -= crnt - old_crnt;
                     // find matching nfu
                     int depth = 1;
                     int matching_nfu = 0;
@@ -1202,34 +1409,120 @@ namespace Automata
                         if (depth == 0)
                         {
                             matching_nfu = i;
+                            break;
                         }
                     }
                     if (matching_nfu == 0)
                         throw new Exceptions.MissingTokenException("Couldn't find matching 'nfu' keyword");
                     var body = new ProgramParser(nextTokens[..(matching_nfu - 1)]).ParseProgram();
-                    crnt = matching_nfu + 1;
+                    end_of_expr -= matching_nfu + 1;
+                    crnt += matching_nfu + 1;
                     lhs = new FunctionValue(new FunctionRunner(arguments, body));
+                    while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.NewLine) ++crnt;
+                    // only operation that can be done on a defined function is a function call
+                    if (nextTokens.Count == 0)
+                    {
+                        crnt += skipWhenReturning;
+                        return lhs;
+                    }
+                    if (nextTokens[0].Type != Token.TokenType.RoundBracket)
+                    {
+                        crnt += skipWhenReturning;
+                        return lhs;
+                    }
                 }
                 
-                if (nextTokens[0].Type == Token.TokenType.Constant)
+                if (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.Constant)
+                {
+                    var token = nextTokens[0];
+                    ++crnt;
+                    --end_of_expr;
+                    if (token.Value[0] == '"')
+                        lhs = new StringValue(StringValue.EscapeString(token.Value[1..^1]));
+                    else
+                        lhs = new NumberValue(double.Parse(token.Value));
+                }
+                else if (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.EmptyObject)
                 {
                     ++crnt;
-                    if (nextTokens[0].Value[0] == '"')
-                        return new StringValue(nextTokens[0].Value[1..^1]);
-                    return new NumberValue(double.Parse(nextTokens[0].Value));
+                    --end_of_expr;
+                    lhs = new ObjectValue();
                 }
-                if (nextTokens[0].Type == Token.TokenType.EmptyObject)
+                else if (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.VarType && nextTokens[0].Value == "nil")
                 {
                     ++crnt;
-                    return new ObjectValue();
+                    --end_of_expr;
+                    lhs = NilValue.Nil;
                 }
-                if (nextTokens[0].Type == Token.TokenType.VarType && nextTokens[0].Value == "nil")
+                else if(nextTokens.Count > 0)
                 {
-                    ++crnt;
-                    return NilValue.Nil;
+                    // parse variable
+                    var old_crnt = crnt;
+                    lhs = ParseVariable();
+                    end_of_expr -= crnt - old_crnt;
                 }
-                // check for function definition
-
+                // check for end of expr
+                if (nextTokens.Count == 0 || end_of_expr <= 0)
+                {
+                    crnt += skipWhenReturning;
+                    return lhs!;
+                }
+                // check for function calling
+                while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.RoundBracket)
+                {
+                    if (lhs == null)
+                        throw new Exceptions.ExpressionParsingErrorException("Tried to parse function call but lhs is null");
+                    if (nextTokens[0].Value == ")")
+                        throw new Exceptions.UnexpectedTokenException("Expected '(' but found ')'");
+                    // parse function arguments
+                    ++crnt; // step over '('
+                    --end_of_expr;
+                    // scan for comma or ')'
+                    depth_r = 0;
+                    depth_s = 0;
+                    int lastArg = 0;
+                    List<IEvaluable> arguments = [];
+                    for(int i = 0; i < end_of_expr; i++)
+                    {
+                        if (nextTokens[i].Type == Token.TokenType.RoundBracket)
+                        {
+                            if (nextTokens[i].Value == "(")
+                                ++depth_s;
+                            else
+                                --depth_s;
+                        }
+                        if (nextTokens[i].Type == Token.TokenType.SquareBracket)
+                        {
+                            if (nextTokens[i].Value == "[")
+                                ++depth_r;
+                            else
+                                --depth_r;
+                        }
+                        if (depth_r > 0 || depth_s > 0)
+                            continue;
+                        if(depth_s < 0)
+                        {
+                            // reached ')'
+                            if (i == 0) break; // no arguments
+                            arguments.Add(new ProgramParser(nextTokens[lastArg..i]).ParseExpression());
+                            lastArg = i;
+                            break;
+                        }
+                        if(depth_s == 0 && nextTokens[i].Type == Token.TokenType.Comma)
+                        {
+                            arguments.Add(new ProgramParser(nextTokens[lastArg..i]).ParseExpression());
+                            lastArg = i + 1;
+                            continue;
+                        }
+                    }
+                    lhs = new FunctionCall(lhs, arguments);
+                    // step crnt
+                    crnt += lastArg + 1; // + 1 step over ')'
+                }
+                crnt += skipWhenReturning;
+                if (lhs == null)
+                    throw new Exceptions.ExpressionParsingErrorException("Reached end of parsing function but lhs is null");
+                return lhs;
             }
 
             public List<(VarResolver, BaseValue.ValueType)> ParseFunctionHead()
@@ -1250,6 +1543,7 @@ namespace Automata
                     if (nextTokens[0].Type == Token.TokenType.Comma)
                         ++crnt; // step over ','
                 }
+                ++crnt; // step over closing ')'
                 return ret;
             }
 
@@ -1258,19 +1552,21 @@ namespace Automata
                 VarResolver current;
                 if (nextTokens[0].Type == Token.TokenType.Variable)
                 {
-                    ++crnt;
                     current = VariableExpander.FromString(nextTokens[0].Value);
-                    while (nextTokens[0].Type == Token.TokenType.SquareBracket)
+                    ++crnt;
+                    while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.SquareBracket)
                     {
                         if (nextTokens[0].Value == "]")
                             throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
-                        ++crnt;
+                        ++crnt; // step over '['
                         var expr = ParseExpression();
+                        if (nextTokens.Count == 0)
+                            throw new Exceptions.MissingTokenException("Expected square bracket but reached end of input");
                         if (nextTokens[0].Type != Token.TokenType.SquareBracket)
                             throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
                         if (nextTokens[0].Value != "]")
                             throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
-                        ++crnt;
+                        ++crnt; // step over ']'
                         current = new VarObjectResolver(current, expr);
                     }
                     return current;
@@ -1398,6 +1694,157 @@ namespace Automata
         public class InvalidValueType : Exception
         {
             public InvalidValueType(string message) : base(message) { }
+        }
+
+        [Serializable]
+        public class ExpressionParsingErrorException : Exception
+        {
+            public ExpressionParsingErrorException(string message) : base(message) { }
+        }
+    }
+
+    namespace DefaultFunctions
+    {
+        public static class DefaultFunctions
+        {
+            public static ICallable print = new NativeFunction([(new VarNameResolver("!str"), BaseValue.ValueType.AnyType)], args =>
+            {
+                Console.Write(args[0].Stringify().Value);
+                return NilValue.Nil;
+            });
+            public static ICallable pow = new NativeFunction([(new VarNameResolver("!a"), BaseValue.ValueType.Number), (new VarNameResolver("!b"), BaseValue.ValueType.Number)], args =>
+            {
+                return new NumberValue(Math.Pow((double)args[0].Value!, (double)args[1].Value!));
+            });
+            public static ICallable range = new NativeFunction([(new VarNameResolver("!a"), BaseValue.ValueType.Number)], args =>
+            {
+                // check if args[0] is whole number >= 0
+                double n = (double)args[0].Value!;
+                if (Math.Floor(n) != n) return NilValue.Nil;
+                if (n < 0) return NilValue.Nil;
+                var obj = new ObjectValue();
+                for (int i = 0; i < n; i++)
+                    obj.SetChild(i.ToString(), new NumberValue(i));
+                obj.SetChild("length", new NumberValue(n));
+                return obj;
+            });
+            public static ICallable range2 = new NativeFunction([(new VarNameResolver("!a"), BaseValue.ValueType.Number), (new VarNameResolver("!b"), BaseValue.ValueType.Number)], args =>
+            {
+                double a = (double)args[0].Value!;
+                double b = (double)args[1].Value!;
+                var obj = new ObjectValue();
+                if (a <= b)
+                {
+                    int j = 0;
+                    for (double i = a; i < b; ++i, ++j)
+                        obj.SetChild(j.ToString(), new NumberValue(i));
+                    obj.SetChild("length", new NumberValue(j));
+                    return obj;
+                }
+                else
+                {
+                    int j = 0;
+                    for (double i = a; i > b; --i, ++j)
+                        obj.SetChild(j.ToString(), new NumberValue(i));
+                    obj.SetChild("length", new NumberValue(j));
+                    return obj;
+                }
+            });
+            public static ICallable range3 = new NativeFunction([(new VarNameResolver("!a"), BaseValue.ValueType.Number), (new VarNameResolver("!b"), BaseValue.ValueType.Number), (new VarNameResolver("!c"), BaseValue.ValueType.Number)], args =>
+            {
+                double a = (double)args[0].Value!;
+                double b = (double)args[1].Value!;
+                double c = (double)args[2].Value!;
+                var obj = new ObjectValue();
+                if (a <= b)
+                {
+                    if (c <= 0) return NilValue.Nil; // loop will never end
+                    int j = 0;
+                    for (double i = a; i < b; i += c, ++j)
+                        obj.SetChild(j.ToString(), new NumberValue(i));
+                    obj.SetChild("length", new NumberValue(j));
+                    return obj;
+                }
+                else
+                {
+                    if (c >= 0) return NilValue.Nil; // loop will never end
+                    int j = 0;
+                    for (double i = a; i > b; i += c, ++j)
+                        obj.SetChild(j.ToString(), new NumberValue(i));
+                    obj.SetChild("length", new NumberValue(j));
+                    return obj;
+                }
+            });
+            public static ICallable @typeof = new NativeFunction([(new VarNameResolver("!obj"), BaseValue.ValueType.AnyType)], args =>
+            {
+                switch (args[0].Type)
+                {
+                    case BaseValue.ValueType.Number:
+                        return new StringValue("number");
+                    case BaseValue.ValueType.String:
+                        return new StringValue("string");
+                    case BaseValue.ValueType.Object:
+                        return new StringValue("object");
+                    case BaseValue.ValueType.Function:
+                        return new StringValue("function");
+                    default:
+                        return new StringValue("nil");
+                }
+            });
+            public static ICallable asciiC = new NativeFunction([(new VarNameResolver("!n"), BaseValue.ValueType.Number)], args =>
+            {
+                double n = (double)args[0].Value!;
+                if (Math.Floor(n) != n) return NilValue.Nil;
+                if (n < 0 || n > 255) return NilValue.Nil;
+                return new StringValue(((char)(int)n).ToString());
+            });
+            public static ICallable asciiN = new NativeFunction([(new VarNameResolver("!s"), BaseValue.ValueType.String)], args =>
+            {
+                string s = (string)args[0].Value!;
+                if (s.Length != 1) return NilValue.Nil;
+                return new NumberValue(s[0]);
+            });
+            public static ICallable isarray = new NativeFunction([(new VarNameResolver("!obj"), BaseValue.ValueType.Object)], args =>
+            {
+                return new NumberValue(((ObjectValue)args[0]).IsArrayConvention() ? 1 : 0);
+            });
+            public static ICallable stoa = new NativeFunction([(new VarNameResolver("!s"), BaseValue.ValueType.String)], args =>
+            {
+                string s = (string)args[0].Value!;
+                var obj = new ObjectValue();
+                for (int i = 0; i < s.Length; i++)
+                    obj.SetChild(i.ToString(), new StringValue(s[i].ToString()));
+                obj.SetChild("length", new NumberValue(s.Length));
+                return obj;
+            });
+            public static ICallable atos = new NativeFunction([(new VarNameResolver("!v"), BaseValue.ValueType.Object)], args =>
+            {
+                var obj = (ObjectValue)args[0];
+                if (!obj.IsArrayConvention()) return NilValue.Nil;
+                StringBuilder s = new();
+                int arr_len = (int)(double)obj.GetChild("length").Value!;
+                for(int i = 0; i < arr_len; i++)
+                {
+                    var ch = obj.GetChild(i.ToString());
+                    s.Append(ch.Stringify().Value);
+                }
+                return new StringValue(s.ToString());
+            });
+
+            public static void RegisterFunctions(Scope scope)
+            {
+                scope.SetVariable(":print", new FunctionValue(print));
+                scope.SetVariable(":pow", new FunctionValue(pow));
+                scope.SetVariable(":range", new FunctionValue(range));
+                scope.SetVariable(":range2", new FunctionValue(range2));
+                scope.SetVariable(":range3", new FunctionValue(range3));
+                scope.SetVariable(":typeof", new FunctionValue(@typeof));
+                scope.SetVariable(":asciiC", new FunctionValue(asciiC));
+                scope.SetVariable(":asciiN", new FunctionValue(asciiN));
+                scope.SetVariable(":stoa", new FunctionValue(stoa));
+                scope.SetVariable(":atos", new FunctionValue(atos));
+                scope.SetVariable(":isarray", new FunctionValue(isarray));
+            }
         }
     }
 

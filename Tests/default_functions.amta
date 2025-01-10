@@ -1,0 +1,2 @@
+$:print($:typeof({}) + "\n")
+$:print($:typeof(nil) + "\n")

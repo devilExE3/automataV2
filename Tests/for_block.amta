@@ -1,4 +1,4 @@
-for $i $:range(5)
+for $!i $:range(5)
     $:print($i)
 rfo
 $:print("\n")
@@ -6,6 +6,6 @@ $array = {}
 $array:0 = "Hello, "
 $array:1 = "World!"
 $array:length = 2
-for $x $array
+for $!x $array
     $:print($x)
 rfo

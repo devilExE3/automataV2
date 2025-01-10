@@ -1,0 +1,6 @@
+$:print($:pow(4, 0.5) + "\n")
+$:print(2 + 2 * 2)
+$:print("\n")
+$:print(2 * 2 + 2)
+$:print("\n")
+$:print((2 + 2) * 2)

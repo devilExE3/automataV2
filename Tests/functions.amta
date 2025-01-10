@@ -1,7 +1,7 @@
-$my_fun = fun($a, $b)
+$my_fun = fun($!a, $!b)
     return $a + $b
 nfu
-$my_fun_2 = fun($a number, $b number)
+$my_fun_2 = fun($!a number, $!b number)
     return $a + $b
 nfu
 $:print($my_fun(1, 1))

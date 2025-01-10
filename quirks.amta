@@ -4,3 +4,5 @@ $:print( \
 	nfu (3, 4) \
 )
 # should print 7
+
+$:print("Hello, world!")
