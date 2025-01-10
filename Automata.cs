@@ -44,6 +44,19 @@ namespace Automata
 
             public override int GetHashCode() => base.GetHashCode();
             public override string ToString() => (string)Stringify().Value!;
+
+            public static ValueType ValueTypeFromString(string str)
+            {
+                if (str == "number")
+                    return ValueType.Number;
+                if (str == "string")
+                    return ValueType.String;
+                if (str == "object")
+                    return ValueType.Object;
+                if (str == "function")
+                    return ValueType.Function;
+                throw new Exceptions.InvalidValueType("Invalid value type " + str);
+            }
         }
         public class NumberValue : BaseValue
         {
@@ -862,7 +875,7 @@ namespace Automata
             }
 
             static List<Token> ExtractOperators(List<Token> oldTokens) => ExtractOperatorsOneChar(ExtractOperatorsTwoChars(oldTokens));
-            static readonly string[] OperatorsTwoChars = ["<=", ">=", "==", "!=", "{}" /*empty object*/];
+            static readonly string[] OperatorsTwoChars = ["<=", ">=", "==", "!=", "{}" /*empty object*/, "&&", "||"];
             static List<Token> ExtractOperatorsTwoChars(List<Token> oldTokens)
             {
                 List<Token> tokens = [];
@@ -1068,6 +1081,15 @@ namespace Automata
                 return ret;
             }
 
+            // infix operators only. prefix are handled separately
+            static readonly string[][] OperatorOrder = [
+                ["||"],
+                ["&&"],
+                ["<", "<=", ">", ">=", "==", "!="],
+                ["+", "-"],
+                ["*", "/", "%"]
+            ];
+
             public IEvaluable ParseExpression()
             {
                 // check for prefix operators
@@ -1090,6 +1112,61 @@ namespace Automata
                     }
                     throw new Exceptions.UnexpectedTokenException($"Expected unary operator but found '{nextTokens[0].Value}'");
                 }
+                // end of expression can be:
+                // unbalanced closed ')' or ']'
+                // comma in root
+                // '\n'
+                int end_of_expr = 0;
+                int depth_r = 0, depth_s = 0;
+                while(true)
+                {
+                    if (end_of_expr >= nextTokens.Count)
+                        break; // reached end of input
+                    if (nextTokens[end_of_expr].Type == Token.TokenType.NewLine)
+                        break; // newline
+                    if (nextTokens[end_of_expr].Type == Token.TokenType.RoundBracket)
+                    {
+                        if (nextTokens[end_of_expr].Value == "(")
+                            ++depth_r;
+                        else
+                            --depth_r;
+                    }
+                    if (nextTokens[end_of_expr].Type == Token.TokenType.SquareBracket)
+                    {
+                        if (nextTokens[end_of_expr].Value == "[")
+                            ++depth_s;
+                        else
+                            --depth_s;
+                    }
+                    if (depth_r > 0 || depth_s > 0)
+                    {
+                        ++end_of_expr;
+                        continue;
+                    }
+                    if (depth_r == 0 && depth_s == 0 && nextTokens[end_of_expr].Type == Token.TokenType.Comma)
+                        break; // comma in root
+                    if (depth_r == -1 || depth_s == -1)
+                        break; // unbalanced ')' or ']'
+                }
+
+                // split by last-eval operator
+                foreach(var op_order in OperatorOrder)
+                {
+                    List<IEvaluable> innerExpr = [];
+                    List<Expression.ExpressionOperator> operators = [];
+                    for(int i = 0; i < end_of_expr; i++)
+                    {
+                        if (nextTokens[i].Type != Token.TokenType.Operator)
+                            continue;
+                        if (op_order.Contains(nextTokens[i].Value))
+                        {
+                            innerExpr.Add(new ProgramParser(nextTokens[..(i - 1)]).ParseExpression());
+                            operators.Add( )
+                        }
+                    }
+                }
+                
+
                 // parse LHS
                 IEvaluable? lhs = null;
                 // first check for bracketed expression
@@ -1131,7 +1208,7 @@ namespace Automata
                         throw new Exceptions.MissingTokenException("Couldn't find matching 'nfu' keyword");
                     var body = new ProgramParser(nextTokens[..(matching_nfu - 1)]).ParseProgram();
                     crnt = matching_nfu + 1;
-                    lhs = new FunctionValue()
+                    lhs = new FunctionValue(new FunctionRunner(arguments, body));
                 }
                 
                 if (nextTokens[0].Type == Token.TokenType.Constant)
@@ -1153,6 +1230,27 @@ namespace Automata
                 }
                 // check for function definition
 
+            }
+
+            public List<(VarResolver, BaseValue.ValueType)> ParseFunctionHead()
+            {
+                ++crnt; // step over opening '('
+                List<(VarResolver, BaseValue.ValueType)> ret = [];
+                while (nextTokens[0].Type != Token.TokenType.RoundBracket || nextTokens[0].Value != ")")
+                {
+                    // parse variable
+                    VarResolver arg = ParseVariable();
+                    BaseValue.ValueType type = BaseValue.ValueType.AnyType;
+                    if (nextTokens[0].Type == Token.TokenType.VarType)
+                    {
+                        type = BaseValue.ValueTypeFromString(nextTokens[0].Value);
+                        ++crnt;
+                    }
+                    ret.Add((arg, type));
+                    if (nextTokens[0].Type == Token.TokenType.Comma)
+                        ++crnt; // step over ','
+                }
+                return ret;
             }
 
             public VarResolver ParseVariable()
@@ -1294,6 +1392,12 @@ namespace Automata
         public class MissingTokenException : Exception
         {
             public MissingTokenException(string message) : base(message) { }
+        }
+
+        [Serializable]
+        public class InvalidValueType : Exception
+        {
+            public InvalidValueType(string message) : base(message) { }
         }
     }
 
