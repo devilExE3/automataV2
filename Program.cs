@@ -56,7 +56,7 @@ namespace automataV2
                 return;
             }
             var instr = new ProgramParser(tokens).ParseProgram();
-            var scope = new Scope(maxWhileLoops);
+            var scope = new Scope(maxWhileLoops == -1 ? int.MaxValue : maxWhileLoops);
             DefaultFunctions.RegisterFunctions(scope);
             // create fake fn runner
             var fileRunner = new FunctionRunner([], instr);

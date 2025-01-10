@@ -793,14 +793,16 @@ namespace Automata
     {
         public class Token
         {
-            public Token(string val, TokenType type = TokenType.Unknown)
+            public Token(string val, TokenType type = TokenType.Unknown, uint originalLine = 0)
             {
                 Value = val;
                 Type = type;
+                OriginalLine = originalLine;
             }
 
             public string Value;
             public TokenType Type;
+            public uint OriginalLine;
 
             public enum TokenType
             {
@@ -1111,7 +1113,7 @@ namespace Automata
 
                 this.tokens = tokens[i..];
             }
-            List<Token> nextTokens => tokens[crnt..];
+            List<Token> nextTokens => crnt >= tokens.Count ? [] : tokens[crnt..];
 
             public List<Instruction> ParseProgram()
             {
@@ -1139,7 +1141,7 @@ namespace Automata
                                 if (depth > 1) continue;
                                 if (nextTokens[i].Value == "el" && depth == 1 && match_el == 0)
                                     match_el = i;
-                                if (nextTokens[i].Value == "fi" && match_fi == 0)
+                                if (nextTokens[i].Value == "fi" && depth == 0 && match_fi == 0)
                                 {
                                     match_fi = i;
                                     break;
