@@ -545,7 +545,7 @@ namespace Automata
                 if (var_name.StartsWith('!'))
                     return this;
                 if (var_name.StartsWith(':'))
-                    return globalScope.GetScopeOfVariable(var_name[1..]);
+                    return globalScope;
                 // try to find variable by traversing scopes
                 Scope search = this;
                 while (!search.variables.ContainsKey(var_name) && !search.isGlobalScope)
