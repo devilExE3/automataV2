@@ -263,11 +263,17 @@ namespace Automata
 
         public class NativeFunction : ICallable
         {
+            public delegate BaseValue nativeFnScope(BaseValue[] args, Scope scope);
             public delegate BaseValue nativeFn(BaseValue[] args);
             List<(VarResolver, BaseValue.ValueType)> head;
             public List<(VarResolver, BaseValue.ValueType)> Head => head;
-            nativeFn fn;
+            nativeFnScope fn;
             public NativeFunction(List<(VarResolver, BaseValue.ValueType)> head, nativeFn fn)
+            {
+                this.head = head;
+                this.fn = (args, _) => fn(args);
+            }
+            public NativeFunction(List<(VarResolver, BaseValue.ValueType)> head, nativeFnScope fn)
             {
                 this.head = head;
                 this.fn = fn;
@@ -278,7 +284,7 @@ namespace Automata
                 List<BaseValue> args_eval = [];
                 foreach(var arg in head)
                     args_eval.Add(arg.Item1.Evaluate(currentScope));
-                return fn(args_eval.ToArray());
+                return fn(args_eval.ToArray(), currentScope);
             }
         }
 
@@ -510,6 +516,9 @@ namespace Automata
 
         public class Scope
         {
+            public delegate void logFn(string s);
+            public logFn LogFunction;
+
             bool isGlobalScope = false;
             Scope parentScope, globalScope;
             Dictionary<string, BaseValue> variables = new();
@@ -523,11 +532,13 @@ namespace Automata
                 parentScope = this;
                 globalScope = this;
                 maxWhileLoops = _maxWhileLoops;
+                LogFunction = Console.Write;
             }
             public Scope(Scope outerScope)
             {
                 parentScope = outerScope;
                 globalScope = outerScope.globalScope;
+                LogFunction = outerScope.LogFunction;
             }
             public Scope? GetScopeOfVariable(string var_name)
             {
@@ -1467,58 +1478,98 @@ namespace Automata
                     crnt += skipWhenReturning;
                     return lhs!;
                 }
-                // check for function calling
-                while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.RoundBracket)
+                // check for function calling or object accessor
+                while(nextTokens.Count > 0 && (nextTokens[0].Type == Token.TokenType.RoundBracket || nextTokens[0].Type == Token.TokenType.SquareBracket))
                 {
-                    if (lhs == null)
-                        throw new Exceptions.ExpressionParsingErrorException("Tried to parse function call but lhs is null");
-                    if (nextTokens[0].Value == ")")
-                        throw new Exceptions.UnexpectedTokenException("Expected '(' but found ')'");
-                    // parse function arguments
-                    ++crnt; // step over '('
-                    --end_of_expr;
-                    // scan for comma or ')'
-                    depth_r = 0;
-                    depth_s = 0;
-                    int lastArg = 0;
-                    List<IEvaluable> arguments = [];
-                    for(int i = 0; i < end_of_expr; i++)
+                    // check for function calling
+                    while (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.RoundBracket)
                     {
-                        if (nextTokens[i].Type == Token.TokenType.RoundBracket)
+                        if (lhs == null)
+                            throw new Exceptions.ExpressionParsingErrorException("Tried to parse function call but lhs is null");
+                        if (nextTokens[0].Value == ")")
+                            throw new Exceptions.UnexpectedTokenException("Expected '(' but found ')'");
+                        // parse function arguments
+                        ++crnt; // step over '('
+                        --end_of_expr;
+                        // scan for comma or ')'
+                        depth_r = 0;
+                        depth_s = 0;
+                        int lastArg = 0;
+                        List<IEvaluable> arguments = [];
+                        for (int i = 0; i < end_of_expr; i++)
                         {
-                            if (nextTokens[i].Value == "(")
-                                ++depth_s;
-                            else
-                                --depth_s;
+                            if (nextTokens[i].Type == Token.TokenType.RoundBracket)
+                            {
+                                if (nextTokens[i].Value == "(")
+                                    ++depth_s;
+                                else
+                                    --depth_s;
+                            }
+                            if (nextTokens[i].Type == Token.TokenType.SquareBracket)
+                            {
+                                if (nextTokens[i].Value == "[")
+                                    ++depth_r;
+                                else
+                                    --depth_r;
+                            }
+                            if (depth_r > 0 || depth_s > 0)
+                                continue;
+                            if (depth_s < 0)
+                            {
+                                // reached ')'
+                                if (i == 0) break; // no arguments
+                                arguments.Add(new ProgramParser(nextTokens[lastArg..i]).ParseExpression());
+                                lastArg = i;
+                                break;
+                            }
+                            if (depth_s == 0 && nextTokens[i].Type == Token.TokenType.Comma)
+                            {
+                                arguments.Add(new ProgramParser(nextTokens[lastArg..i]).ParseExpression());
+                                lastArg = i + 1;
+                                continue;
+                            }
                         }
-                        if (nextTokens[i].Type == Token.TokenType.SquareBracket)
-                        {
-                            if (nextTokens[i].Value == "[")
-                                ++depth_r;
-                            else
-                                --depth_r;
-                        }
-                        if (depth_r > 0 || depth_s > 0)
-                            continue;
-                        if(depth_s < 0)
-                        {
-                            // reached ')'
-                            if (i == 0) break; // no arguments
-                            arguments.Add(new ProgramParser(nextTokens[lastArg..i]).ParseExpression());
-                            lastArg = i;
-                            break;
-                        }
-                        if(depth_s == 0 && nextTokens[i].Type == Token.TokenType.Comma)
-                        {
-                            arguments.Add(new ProgramParser(nextTokens[lastArg..i]).ParseExpression());
-                            lastArg = i + 1;
-                            continue;
-                        }
+                        lhs = new FunctionCall(lhs, arguments);
+                        // step crnt
+                        crnt += lastArg + 1; // + 1 step over ')'
+                        end_of_expr -= lastArg + 1;
                     }
-                    lhs = new FunctionCall(lhs, arguments);
-                    // step crnt
-                    crnt += lastArg + 1; // + 1 step over ')'
+                    // check for object accessor
+                    while(nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.SquareBracket)
+                    {
+                        if(lhs == null)
+                            throw new Exceptions.ExpressionParsingErrorException("Tried to parse object accessor but lhs is null");
+                        if (nextTokens[0].Value == "]")
+                            throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']'");
+                        // parse accessor
+                        ++crnt; // step over '['
+                        --end_of_expr;
+                        // find matching ']'
+                        int match = 0;
+                        int depth = 1;
+                        for(int i = 0; i < end_of_expr; i++)
+                        {
+                            if (nextTokens[i].Type != Token.TokenType.SquareBracket) continue;
+                            if (nextTokens[i].Value == "[")
+                                ++depth;
+                            else
+                                --depth;
+                            if(depth == 0)
+                            {
+                                match = i;
+                                break;
+                            }
+                        }
+                        if (match == 0)
+                            throw new Exceptions.MissingTokenException("Couldn't find matching ']'");
+                        var acc = new ProgramParser(nextTokens[..match]).ParseExpression();
+                        lhs = new ObjectAccessor(lhs, acc);
+                        // step crnt
+                        crnt += match + 1;
+                        end_of_expr -= match + 1;
+                    }
                 }
+                
                 crnt += skipWhenReturning;
                 if (lhs == null)
                     throw new Exceptions.ExpressionParsingErrorException("Reached end of parsing function but lhs is null");
@@ -1559,49 +1610,32 @@ namespace Automata
                         if (nextTokens[0].Value == "]")
                             throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
                         ++crnt; // step over '['
-                        var expr = ParseExpression();
-                        if (nextTokens.Count == 0)
-                            throw new Exceptions.MissingTokenException("Expected square bracket but reached end of input");
-                        if (nextTokens[0].Type != Token.TokenType.SquareBracket)
-                            throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
-                        if (nextTokens[0].Value != "]")
-                            throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
-                        ++crnt; // step over ']'
+                        // find mathcing ']'
+                        int match = 0;
+                        int depth = 1;
+                        for (int i = 0; i < nextTokens.Count; i++)
+                        {
+                            if (nextTokens[i].Type != Token.TokenType.SquareBracket) continue;
+                            if (nextTokens[i].Value == "[")
+                                ++depth;
+                            else
+                                --depth;
+                            if (depth == 0)
+                            {
+                                match = i;
+                                break;
+                            }
+                        }
+                        if (match == 0)
+                            throw new Exceptions.MissingTokenException("Expected ']' but reached end of input");
+                        var expr = new ProgramParser(nextTokens[..match]).ParseExpression();
+                        crnt += match + 1;
                         current = new VarObjectResolver(current, expr);
                     }
                     return current;
                 }
                 else
-                {
-                    var baseExpr = ParseExpression();
-                    if (nextTokens[0].Type != Token.TokenType.SquareBracket)
-                        throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
-                    // manually parse first accessor
-                    if (nextTokens[0].Value == "]")
-                        throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
-                    ++crnt;
-                    var baseAccessor = ParseExpression();
-                    if (nextTokens[0].Type != Token.TokenType.SquareBracket)
-                        throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
-                    if (nextTokens[0].Value != "]")
-                        throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
-                    ++crnt;
-                    current = new ObjectAccessor(baseExpr, baseAccessor);
-                    while (nextTokens[0].Type == Token.TokenType.SquareBracket)
-                    {
-                        if (nextTokens[0].Value == "]")
-                            throw new Exceptions.UnexpectedTokenException("Expected '[' but found ']' instead");
-                        ++crnt;
-                        var accessor = ParseExpression();
-                        if (nextTokens[0].Type != Token.TokenType.SquareBracket)
-                            throw new Exceptions.MissingTokenException("Expected square bracket but found " + nextTokens[0]);
-                        if (nextTokens[0].Value != "]")
-                            throw new Exceptions.UnexpectedTokenException("Expected ']' but found '[' instead");
-                        ++crnt;
-                        current = new ObjectAccessor(current, accessor);
-                    }
-                    return current;
-                }
+                    throw new Exceptions.UnexpectedTokenException("Tried to parse non-variable token " + nextTokens[0]);
             }
         }
 
@@ -1707,9 +1741,9 @@ namespace Automata
     {
         public static class DefaultFunctions
         {
-            public static ICallable print = new NativeFunction([(new VarNameResolver("!str"), BaseValue.ValueType.AnyType)], args =>
+            public static ICallable print = new NativeFunction([(new VarNameResolver("!str"), BaseValue.ValueType.AnyType)], (args, scope) =>
             {
-                Console.Write(args[0].Stringify().Value);
+                scope.LogFunction((string)args[0].Stringify().Value!);
                 return NilValue.Nil;
             });
             public static ICallable pow = new NativeFunction([(new VarNameResolver("!a"), BaseValue.ValueType.Number), (new VarNameResolver("!b"), BaseValue.ValueType.Number)], args =>

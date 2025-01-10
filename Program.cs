@@ -7,8 +7,66 @@ namespace automataV2
 {
     internal class Program
     {
+        static void PrintHelp()
+        {
+            Console.WriteLine("General Usage:\n  amta file_name [--max_while_loops N]\nfile_name is the file which will be interpreted.\nThe file is treated as a function block and ran as such. You can also use 'return' to return an exit value\n\n--max_while_loops N - specify maximum number of times a while block can run.\nIf you want to disable the limit, use -1\nDefault: 10000\n\namta --help");
+        }
+
         static void Main(string[] args)
         {
+            // automata cli
+#if DEBUG
+#else
+            Console.WriteLine("automata CLI.\nMade by devilexe\n\n");
+            if(args.Length == 0)
+            {
+                PrintHelp();
+                return;
+            }
+            string? amta_file = null;
+            int maxWhileLoops = 10000;
+            for(int i = 0; i < args.Length; i++)
+            {
+                if (args[i].StartsWith("--"))
+                {
+                    switch (args[i])
+                    {
+                        case "--help":
+                            PrintHelp();
+                            return;
+                        case "--max_while_loops":
+                            maxWhileLoops = int.Parse(args[i + 1]);
+                            ++i;
+                            break;
+                    }
+                }
+                else
+                    amta_file = args[i];
+            }
+            if(amta_file == null)
+            {
+                PrintHelp();
+                return;
+            }
+            var program = ProgramCleaner.CleanProgram(File.ReadAllText(amta_file));
+            var tokens = Tokenizer.Tokenize(program);
+            if (tokens.Count == 0)
+            {
+                Console.WriteLine("Input file is empty");
+                return;
+            }
+            var instr = new ProgramParser(tokens).ParseProgram();
+            var scope = new Scope(maxWhileLoops);
+            DefaultFunctions.RegisterFunctions(scope);
+            // create fake fn runner
+            var fileRunner = new FunctionRunner([], instr);
+            // scope file
+            var fileScope = new Scope(scope);
+            var retVal = fileRunner.Call(fileScope);
+            Console.WriteLine("\n--- Program exited with value: " + retVal.Stringify().Value);
+            return;
+#endif
+#if DEBUG
             while (true)
             {
                 var program = "";
@@ -42,6 +100,7 @@ namespace automataV2
                     }
                 }
             }
+#endif
             // tests
             //foreach (var file in Directory.GetFiles("Tests"))
             //{
