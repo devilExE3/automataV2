@@ -2,6 +2,7 @@
 using Automata.Utils;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection.Metadata.Ecma335;
 using System.Runtime.CompilerServices;
@@ -66,7 +67,7 @@ namespace Automata
                 Type = ValueType.Number;
                 Value = value;
             }
-            public override StringValue Stringify(int _) => new(((double)Value!).ToString());
+            public override StringValue Stringify(int _) => new(((double)Value!).ToString(CultureInfo.InvariantCulture));
             public override bool Equals(BaseValue other)
             {
                 if (other.Type != ValueType.Number)
@@ -371,7 +372,7 @@ namespace Automata
                         if (rhs == null)
                         { // unary operator +
                             if (lhs_value.Type == BaseValue.ValueType.String)
-                                return new NumberValue(double.Parse((string)lhs_value.Value!));
+                                return new NumberValue(double.Parse((string)lhs_value.Value!, CultureInfo.InvariantCulture));
                             throw new Exceptions.InvalidOperationException($"Tried converting non-string value {lhs_value.Stringify().Value} to Number");
                         }
                         if (lhs_value.Type == BaseValue.ValueType.Number && rhs_value!.Type == BaseValue.ValueType.Number)
@@ -1453,7 +1454,7 @@ namespace Automata
                     if (token.Value[0] == '"')
                         lhs = new StringValue(StringValue.EscapeString(token.Value[1..^1]));
                     else
-                        lhs = new NumberValue(double.Parse(token.Value));
+                        lhs = new NumberValue(double.Parse(token.Value, CultureInfo.InvariantCulture));
                 }
                 else if (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.EmptyObject)
                 {
