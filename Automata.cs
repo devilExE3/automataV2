@@ -411,6 +411,7 @@ namespace Automata
                             throw new Exceptions.InvalidOperationException($"RHS value {rhs_value!.Stringify().Value} of operator Modulo is not Number");
                         var val = (double)lhs_value.Value!;
                         var mod = (double)rhs_value.Value!;
+                        if (mod <= 0) throw new Exceptions.InvalidOperationException($"RHS value {mod} is negative or zero");
                         while (val < 0) val += mod;
                         while (val >= mod) val -= mod;
                         return new NumberValue(val);
