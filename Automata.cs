@@ -519,7 +519,9 @@ namespace Automata
         public class Scope
         {
             public delegate void logFn(string s);
+            public delegate string readLineFn();
             public logFn LogFunction;
+            public readLineFn ReadLineFunction;
 
             bool isGlobalScope = false;
             Scope parentScope, globalScope;
@@ -535,12 +537,14 @@ namespace Automata
                 globalScope = this;
                 maxWhileLoops = _maxWhileLoops;
                 LogFunction = Console.Write;
+                ReadLineFunction = Console.ReadLine!;
             }
             public Scope(Scope outerScope)
             {
                 parentScope = outerScope;
                 globalScope = outerScope.globalScope;
                 LogFunction = outerScope.LogFunction;
+                ReadLineFunction = outerScope.ReadLineFunction;
             }
             public Scope? GetScopeOfVariable(string var_name)
             {
@@ -1868,6 +1872,20 @@ namespace Automata
                 }
                 return new StringValue(s.ToString());
             });
+            public static ICallable getln = new NativeFunction([], (args, scope) =>
+            {
+                return new StringValue(scope.ReadLineFunction());
+            });
+            public static ICallable floor = new NativeFunction([(new VarNameResolver("!val"), BaseValue.ValueType.Number)], args =>
+            {
+                double f = (double)args[0].Value!;
+                return new NumberValue(Math.Floor(f));
+            });
+            public static ICallable ceil = new NativeFunction([(new VarNameResolver("!val"), BaseValue.ValueType.Number)], args =>
+            {
+                double f = (double)args[0].Value!;
+                return new NumberValue(Math.Ceiling(f));
+            });
 
             public static void RegisterFunctions(Scope scope)
             {
@@ -1882,6 +1900,9 @@ namespace Automata
                 scope.SetVariable(":stoa", new FunctionValue(stoa));
                 scope.SetVariable(":atos", new FunctionValue(atos));
                 scope.SetVariable(":isarray", new FunctionValue(isarray));
+                scope.SetVariable(":getln", new FunctionValue(getln));
+                scope.SetVariable(":floor", new FunctionValue(floor));
+                scope.SetVariable(":ceil", new FunctionValue(ceil));
             }
         }
     }
