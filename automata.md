@@ -96,7 +96,7 @@ fun($a number, $b number)
 nfu
 ```
 ## Defining and calling a function
-Functions can be called as-is, without registering them anywhere, but most use cases need the function to be called multiple times.
+~~Functions can be called as-is, without registering them anywhere, but most use cases need the function to be called multiple times.~~
 ```
 $:add = fun($a number, $b number)
     return $a + $b
