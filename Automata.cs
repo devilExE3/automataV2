@@ -2,6 +2,7 @@
 using Automata.Utils;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection.Metadata.Ecma335;
 using System.Runtime.CompilerServices;
@@ -66,7 +67,7 @@ namespace Automata
                 Type = ValueType.Number;
                 Value = value;
             }
-            public override StringValue Stringify(int _) => new(((double)Value!).ToString());
+            public override StringValue Stringify(int _) => new(((double)Value!).ToString(CultureInfo.InvariantCulture));
             public override bool Equals(BaseValue other)
             {
                 if (other.Type != ValueType.Number)
@@ -371,7 +372,7 @@ namespace Automata
                         if (rhs == null)
                         { // unary operator +
                             if (lhs_value.Type == BaseValue.ValueType.String)
-                                return new NumberValue(double.Parse((string)lhs_value.Value!));
+                                return new NumberValue(double.Parse((string)lhs_value.Value!, CultureInfo.InvariantCulture));
                             throw new Exceptions.InvalidOperationException($"Tried converting non-string value {lhs_value.Stringify().Value} to Number");
                         }
                         if (lhs_value.Type == BaseValue.ValueType.Number && rhs_value!.Type == BaseValue.ValueType.Number)
@@ -410,6 +411,7 @@ namespace Automata
                             throw new Exceptions.InvalidOperationException($"RHS value {rhs_value!.Stringify().Value} of operator Modulo is not Number");
                         var val = (double)lhs_value.Value!;
                         var mod = (double)rhs_value.Value!;
+                        if (mod <= 0) throw new Exceptions.InvalidOperationException($"RHS value {mod} is negative or zero");
                         while (val < 0) val += mod;
                         while (val >= mod) val -= mod;
                         return new NumberValue(val);
@@ -517,7 +519,9 @@ namespace Automata
         public class Scope
         {
             public delegate void logFn(string s);
+            public delegate string readLineFn();
             public logFn LogFunction;
+            public readLineFn ReadLineFunction;
 
             bool isGlobalScope = false;
             Scope parentScope, globalScope;
@@ -533,12 +537,14 @@ namespace Automata
                 globalScope = this;
                 maxWhileLoops = _maxWhileLoops;
                 LogFunction = Console.Write;
+                ReadLineFunction = Console.ReadLine!;
             }
             public Scope(Scope outerScope)
             {
                 parentScope = outerScope;
                 globalScope = outerScope.globalScope;
                 LogFunction = outerScope.LogFunction;
+                ReadLineFunction = outerScope.ReadLineFunction;
             }
             public Scope? GetScopeOfVariable(string var_name)
             {
@@ -1453,7 +1459,7 @@ namespace Automata
                     if (token.Value[0] == '"')
                         lhs = new StringValue(StringValue.EscapeString(token.Value[1..^1]));
                     else
-                        lhs = new NumberValue(double.Parse(token.Value));
+                        lhs = new NumberValue(double.Parse(token.Value, CultureInfo.InvariantCulture));
                 }
                 else if (nextTokens.Count > 0 && nextTokens[0].Type == Token.TokenType.EmptyObject)
                 {
@@ -1866,6 +1872,20 @@ namespace Automata
                 }
                 return new StringValue(s.ToString());
             });
+            public static ICallable getln = new NativeFunction([], (args, scope) =>
+            {
+                return new StringValue(scope.ReadLineFunction());
+            });
+            public static ICallable floor = new NativeFunction([(new VarNameResolver("!val"), BaseValue.ValueType.Number)], args =>
+            {
+                double f = (double)args[0].Value!;
+                return new NumberValue(Math.Floor(f));
+            });
+            public static ICallable ceil = new NativeFunction([(new VarNameResolver("!val"), BaseValue.ValueType.Number)], args =>
+            {
+                double f = (double)args[0].Value!;
+                return new NumberValue(Math.Ceiling(f));
+            });
 
             public static void RegisterFunctions(Scope scope)
             {
@@ -1880,6 +1900,9 @@ namespace Automata
                 scope.SetVariable(":stoa", new FunctionValue(stoa));
                 scope.SetVariable(":atos", new FunctionValue(atos));
                 scope.SetVariable(":isarray", new FunctionValue(isarray));
+                scope.SetVariable(":getln", new FunctionValue(getln));
+                scope.SetVariable(":floor", new FunctionValue(floor));
+                scope.SetVariable(":ceil", new FunctionValue(ceil));
             }
         }
     }
