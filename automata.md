@@ -2,10 +2,10 @@
 Variables are loosly typed, but strongly enforced. They can be of three types: string, number, function and object.  
 A variable can also be `nil`, meaning it exists but it has no value.
 ## Variable scoping
-By default, variables are scoped in the current block and shadow any variables with the same name outside of the current block.  
-In order to shadow a variable in an outer scope, prefix it's name with `!`. Function parameter variable names are automatically placed on its scope, shadowing any outer variables.
+By default, variables are scoped in the current block, if there is no variable with the same name on an outer block.  
+In order to shadow a variable in an outer scope, prefix it's name with `!`. Function parameter variables are taken as-is, meaning they will not shadow outer variables if not prefixed with `!`.  
 Variables can also be global, if their name starts with `:`  
-Another thing to keep in mind, the global context may be shared by the backend with multiple scripts. automata will automatically scope the variables declared in the root block to the program.
+Another thing to keep in mind, the global context may be shared by the backend with multiple scripts. automata CLI will automatically scope the variables declared in the root block to the program.  
 ## Examples
 Basic variable types
 ```
@@ -20,9 +20,9 @@ $obj:b = "str"
 $obj:c = {}
 $obj:c["other_name"] = "hello, nested"
 ```
-Note that you cannot initialize an object at declaration, you have to declare every child by itself.
+Note that you cannot initialize an object at declaration, you have to declare every child by itself.  
+Also note that you can access a nested variable by it's name provided you use `[]`  
 Global variables  
-Also note that you can access a nested variable by it's name provided you use `[]`
 ```
 $:global_string = "Hello, global string!"
 $:bar = {}
@@ -57,7 +57,7 @@ $fun = fun($a string)
 nfu
 $fun("World!")
 $:print($a)
-# output : World!World!
+    # output : World!World!
 ```
 Variables can be deleted by assigning `nil` to them
 ```
@@ -78,12 +78,12 @@ $my_array:length = 2
 ```
 # Functions
 Functions are blocks of code that can be executed arbitrarly. A function contains a head and a body.  
-The function's body denotes the paramaters. The function's body denotes the code to be run when called.  
+The function's head denotes the paramaters. The function's body denotes the code to be run when called.  
 The function can also return a value by `return`-ing it. By default the function returns the `nil` variable.  
 The function's parameters can also be type-enforced, meaning automata will error out when calling with invalid parameter types.  
-Another thing to keep in mind, your program will be ran as it were a function block.
+Another thing to keep in mind, your program will be ran as it were a function body.  
 ## Examples
-Loosly enforced types. May error if called with function, object or `nil` type variable
+Loosly enforced types. May error if called with function, object or `nil` type variable  
 ```
 fun($a, $b)
     return $a + $b
@@ -167,19 +167,24 @@ There are no base2 operators or power operators because the numbers are real. Yo
 Between strings:  
 `+` - concatenation. Will automatically convert to string if either rhs or lhs is a number.  
 `==`, `!=` (standard comparations)  
-`<`, `<=`, `>`, `>=` (C#'s string.CompareTo function vs 0 aka lexicographic comparation)
+`<`, `<=`, `>`, `>=` (C#'s string.CompareTo function vs 0 aka lexicographic comparation)  
+Between expressions:  
+`&&`, `||` (standard boolean operators)  
+An expression is considered false if the value of it is `nil` or `0`.  
+These operators will return `1` or `0`, if the condition is held or not.  
 ## Unary prefix operators
 To numbers:  
 `-` - negative value.  
 `!` (logical not) - will return 1 if the expression is 0 or `nil`, 0 otherwise  
-To strings:
-`+` - attempt to parse the string as a number. if the string is not a number, will give `nil`
+To strings:  
+`+` - attempt to parse the string as a number. if the string is not a number, will give `nil`  
 ## Operator order
-Expression result is calculated from left to right, by applying operators in the following order:
+Expression result is calculated from left to right, by applying operators in the following order:  
 - unary operators
-- comparations
 - `+`, `-`
 - `*`, `/`, `%`
+- comparations
+- `&&`, `||`
 # Program parsing
 ## Instruction parsing
 Separate instructions should be separated by the `\n` (new line) character. This kind of replaces the `;` character from C-like languages.  
@@ -195,7 +200,7 @@ lines\
 # this is the same as
 $my_string = "Hello, from multiplelines"
 ```
-Note that you may also leaev comments in your code by prefixing a line with `#`
+Note that you may also leave comments in your code by prefixing a line with `#`
 ## String parsing
 Escape character in strings is `\`. The following are escape codes:
 - `\\` - literal `\`
@@ -232,5 +237,5 @@ Note that depending on the implementation, some functions may be removed or adde
 
 Should there be any unknown tokens, the tokenizer will throw an exception.
 
-### Converting to BlockedTokens
-- Tokens are grouped by blocks (ie `fun`'s, `if`'s, etc..)
+### Converting to Instructions
+- Converting assignemnts, function calls, `if`s, `while`s, `for`s.
